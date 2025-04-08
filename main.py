@@ -1,13 +1,14 @@
 import os
 import random
 import time
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle  # Added idle import here
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, User, ChatJoinRequest, ChatPermissions
 from pyrogram.errors import FloodWait, UserNotParticipant, ChatAdminRequired, UsernameInvalid, PeerIdInvalid
 import asyncio
 from keepalive import keep_alive
 keep_alive()
 
+# Rest of your code remains unchanged
 # Bot owners and sudo users lists
 BOT_OWNERS = [6985505204, 7335254391]  # List of bot owner IDs
 SUDO_USERS = set()  # Set of sudo users who have owner-like privileges
@@ -1693,33 +1694,14 @@ def load_settings():
         print(f"Error loading settings: {e}")
 
 # Main function to start the bot
+# ... existing code ...
+
 async def main():
-    # Load stats and settings
-    load_stats()
-    load_settings()
-    
-    # Start periodic saving tasks
-    asyncio.create_task(save_stats_periodically())
-    asyncio.create_task(save_settings_periodically())
-    
-    # Start the bot
     await pr0fess0r_99.start()
-    
-    # Get bot info
-    bot_info = await pr0fess0r_99.get_me()
-    print(f"Bot started as @{bot_info.username}")
-    
-    # Keep the bot running
-    await idle()
-    
-    # Save stats and settings before stopping
-    save_stats()
-    save_settings()
-    
-    # Stop the bot
+    print("Bot started successfully!")
+    await idle()  # This keeps the bot running until you stop it
     await pr0fess0r_99.stop()
 
-# Run the bot
 if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main())
