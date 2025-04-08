@@ -1,15 +1,15 @@
-import os
+ import os
 import random
 import time
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, User, ChatJoinRequest, ChatPermissions
-from pyrogram.errors import FloodWait, UserNotParticipant, ChatAdminRequired
+from pyrogram.errors import FloodWait, UserNotParticipant, ChatAdminRequired, UsernameInvalid, PeerIdInvalid
 import asyncio
 from keepalive import keep_alive
 keep_alive()
 
 # Bot owners and sudo users lists
-BOT_OWNERS = [6985505204,7335254391]  # List of bot owner IDs
+BOT_OWNERS = [6985505204, 7335254391]  # List of bot owner IDs
 SUDO_USERS = set()  # Set of sudo users who have owner-like privileges
 
 # Try to import TgCrypto for better performance
@@ -24,7 +24,7 @@ os.environ["BOT_TOKEN"] = "7399953040:AAGjsk0m1W5ymXq2KESrYsTf2-wMb2xLKVg"
 os.environ["API_ID"] = "25056303"
 os.environ["API_HASH"] = "423f1e11581ff494841681fc66e9c8e6"
 os.environ["APPROVED_WELCOME_TEXT"] = "Hello {mention} Welcome to {title} Your request was approved!"
-BOT_OWNERS = [6985505204] 
+
 # Bot maintenance team configuration
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))  # Main bot owner
 if os.environ.get("SUDO_USERS"):
@@ -65,12 +65,17 @@ chat_settings = {}
 # Store globally banned users
 banned_users = set()
 
+# Store globally muted users
+muted_users = set()
+
 # Store tagging state
 tagging_in_progress = {}
 tagged_users = {}
 
+# Store mafia games
+mafia_games = {}
+
 # Helper functions
-# Remove the duplicate functions and keep only the fixed versions
 async def is_maintenance_team(user_id):
     """Check if user is in the maintenance team (owner or sudo)"""
     return user_id in BOT_OWNERS or user_id == OWNER_ID or user_id in SUDO_USERS
@@ -84,8 +89,6 @@ async def is_admin_or_owner(client, chat_id, user_id):
     try:
         # Get the chat member information directly
         member = await client.get_chat_member(chat_id, user_id)
-        # Print debug info
-        print(f"Admin check for {user_id} in {chat_id}: status={member.status}")
         # Check if user is creator or administrator
         return member.status in ["creator", "administrator"] or "owner" in str(member.status).lower()
     except Exception as e:
@@ -122,10 +125,46 @@ async def has_ban_rights(client, chat_id, user_id):
         print(f"Error checking ban rights: {e}")
         return False
 
+async def find_user_in_chat(client, chat_id, username_or_id):
+    """Find a user in a chat by username or ID, with improved error handling"""
+    target_user_id = None
+    
+    # If it's already a user ID
+    if isinstance(username_or_id, int) or (isinstance(username_or_id, str) and username_or_id.isdigit()):
+        target_user_id = int(username_or_id)
+        return target_user_id
+    
+    # If it's a username
+    if isinstance(username_or_id, str):
+        username = username_or_id.replace("@", "")
+        
+        # Try multiple methods to find the user
+        try:
+            # Method 1: Direct get_users call
+            user = await client.get_users(username)
+            return user.id
+        except (UsernameInvalid, PeerIdInvalid):
+            # Method 2: Search in chat members
+            try:
+                async for member in client.get_chat_members(chat_id, query=username):
+                    if member.user.username and member.user.username.lower() == username.lower():
+                        return member.user.id
+            except Exception as e:
+                print(f"Error searching chat members: {e}")
+                
+            # Method 3: Try to find in recent messages
+            try:
+                async for message in client.get_chat_history(chat_id, limit=100):
+                    if message.from_user and message.from_user.username and message.from_user.username.lower() == username.lower():
+                        return message.from_user.id
+            except Exception as e:
+                print(f"Error searching chat history: {e}")
+                
+    return None
+
 # Auto-approve join requests
 @pr0fess0r_99.on_chat_join_request(filters.group)
 async def auto_approve(client, message: ChatJoinRequest):
-    # ... existing code ...
     chat_id = message.chat.id
     user_id = message.from_user.id
 
@@ -255,6 +294,8 @@ You can use these placeholders in your custom welcome messages:
 • `/broadcast` - Send message to all chats
 • `/gban` - Ban user globally
 • `/ungban` - Unban user globally
+• `/gmute` - Mute user globally
+• `/ungmute` - Unmute user globally
 • `/banall` - Ban all members in a group
 • `/unbanall` - Unban all banned members
 • `/muteall` - Mute all members in a group
@@ -672,181 +713,302 @@ async def reset_tag(client, message):
     else:
         await message.reply("No tag data exists for this chat.")
 
-# New Mafia game command - Can be used by anyone
+# Improved Mafia game command
 @pr0fess0r_99.on_message(filters.command(["mafia"]) & filters.group)
 async def mafia_game(client, message):
     chat_id = message.chat.id
-
-    # Get number of players (default to 10)
-    num_players = 10
+    user_id = message.from_user.id
+    
+    # Check if a game is already in progress
+    if chat_id in mafia_games and mafia_games[chat_id]["active"]:
+        await message.reply("A Mafia game is already in progress in this chat.")
+        return
+    
+    # Initialize new game
+    min_players = 5  # Minimum players required
     if len(message.command) > 1 and message.command[1].isdigit():
-        num_players = int(message.command[1])
-        if num_players < 4:
-            await message.reply("You need at least 4 players for a Mafia game.")
-            return
-        if num_players > 20:
-            num_players = 20  # Limit to 20 players max
+        min_players = max(5, int(message.command[1]))  # Ensure at least 5 players
+    
+    # Create join button
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Join Game", callback_data="join_mafia")],
+        [InlineKeyboardButton("Start Game", callback_data="start_mafia")]
+    ])
+    
+    # Send invitation message
+    invite_msg = await message.reply(
+        f"🎮 **Mafia Game**\n\n"
+        f"A new Mafia game is starting! Click the button below to join.\n\n"
+        f"Minimum players needed: {min_players}\n"
+        f"Players joined: 1/{min_players}\n\n"
+        f"Game will start automatically in 60 seconds or when enough players join."
+        f"Creator: {message.from_user.mention}",
+        reply_markup=keyboard
+    )
+    
+    # Initialize game data
+    mafia_games[chat_id] = {
+        "active": False,
+        "players": {user_id: message.from_user.first_name},
+        "min_players": min_players,
+        "message_id": invite_msg.id,
+        "end_time": time.time() + 60,  # 60 seconds to join
+        "creator": user_id,
+        "roles": {},
+        "leaderboard": {}
+    }
+    
+    # Schedule game start after timeout
+    asyncio.create_task(start_mafia_game_after_timeout(client, chat_id))
 
-    # Get members
-    status_message = await message.reply("🎮 Setting up Mafia game...")
-
-    try:
-        # Get all members
-        all_members = []
-        async for member in client.get_chat_members(chat_id):
-            if not member.user.is_bot and not member.user.is_deleted:
-                all_members.append(member.user)
-
-        if len(all_members) < num_players:
-            await status_message.edit_text(f"Not enough members in the group. Need {num_players} players but only found {len(all_members)}.")
-            return
-
-        # Select random players
-        players = random.sample(all_members, num_players)
-
-        # Assign roles
-        mafia_count = max(1, num_players // 5)  # 20% are mafia
-        detective_count = 1
-        doctor_count = 1
-
-        roles = ["Mafia"] * mafia_count + ["Detective"] * detective_count + ["Doctor"] * doctor_count
-        roles += ["Civilian"] * (num_players - len(roles))
-        random.shuffle(roles)
-
-        # Create game message
-        game_msg = "🎭 **Mafia Game Setup**\n\n"
-        game_msg += f"**Total Players:** {num_players}\n"
-        game_msg += f"**Mafia:** {mafia_count}\n"
-        game_msg += f"**Detective:** {detective_count}\n"
-        game_msg += f"**Doctor:** {doctor_count}\n"
-        game_msg += f"**Civilians:** {num_players - mafia_count - detective_count - doctor_count}\n\n"
-
-        # Send roles to each player privately
-        for i, player in enumerate(players):
-            role = roles[i]
-            try:
-                await client.send_message(
-                    player.id,
-                    f"🎮 **Mafia Game in {message.chat.title}**\n\nYour role is: **{role}**\n\n"
-                    f"{'🔪 You are a Mafia. Kill civilians at night and blend in during the day.' if role == 'Mafia' else ''}"
-                    f"{'🔍 You are a Detective. You can investigate one player each night to determine if they are Mafia.' if role == 'Detective' else ''}"
-                    f"{'💉 You are a Doctor. You can save one player each night from being killed.' if role == 'Doctor' else ''}"
-                    f"{'👨‍👩‍👧‍👦 You are a Civilian. Find the Mafia before they kill everyone!' if role == 'Civilian' else ''}"
-                )
-                game_msg += f"• {player.mention} has received their role.\n"
-            except Exception as e:
-                game_msg += f"• {player.mention} could not receive their role (make sure they've started the bot).\n"
-                print(f"Error sending role to {player.id}: {e}")
-
-        # Send final game setup message
-        await status_message.edit_text(game_msg)
-
-        # Send game instructions
-        instructions = """
-**🎲 How to Play Mafia:**
-
-1. The game alternates between "day" and "night" phases.
-2. During the night, the Mafia chooses someone to kill, the Detective investigates a player, and the Doctor saves someone.
-3. During the day, all players discuss who they think is Mafia and vote to eliminate one person.
-4. The game continues until either all Mafia are eliminated (Town wins) or the Mafia outnumbers the Town (Mafia wins).
-
-This is just a role assignment - continue the game through discussion in the group!
-"""
-        await client.send_message(chat_id, instructions)
-
-    except Exception as e:
-        await status_message.edit_text(f"Error setting up Mafia game: {e}")
-
-# Add a debug command to check admin status
-@pr0fess0r_99.on_message(filters.command(["checkadmin"]) & filters.group)
-async def check_admin_status(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # If replying to someone, check their admin status
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user_id = message.reply_to_message.from_user.id
-        target_user = message.reply_to_message.from_user
-    else:
-        target_user_id = user_id
-        target_user = message.from_user
-
-    try:
-        # Get detailed member info
-        member = await client.get_chat_member(chat_id, target_user_id)
-
-        # Create detailed status message
-        status_text = f"👤 **Admin Status Check for {target_user.mention}**\n\n"
-        status_text += f"**User ID:** `{target_user_id}`\n"
-        status_text += f"**Status:** {member.status}\n\n"
-
-        if member.status == "administrator":
-            status_text += "**Admin Permissions:**\n"
-            status_text += f"- Can change info: {member.can_change_info}\n"
-            status_text += f"- Can delete messages: {member.can_delete_messages}\n"
-            status_text += f"- Can restrict members: {member.can_restrict_members}\n"
-            status_text += f"- Can invite users: {member.can_invite_users}\n"
-            status_text += f"- Can pin messages: {member.can_pin_messages}\n"
-            status_text += f"- Can promote members: {member.can_promote_members}\n"
-
-        # Check using our functions
-        is_admin = await is_admin_or_owner(client, chat_id, target_user_id)
-        has_ban = await has_ban_rights(client, chat_id, target_user_id)
-
-        status_text += f"\n**Function Checks:**\n"
-        status_text += f"- is_admin_or_owner: {is_admin}\n"
-        status_text += f"- has_ban_rights: {has_ban}\n"
-
-        await message.reply(status_text)
-    except Exception as e:
-        await message.reply(f"Error checking admin status: {e}")
-
-# Enable/disable auto-approve commands
-@pr0fess0r_99.on_message(filters.command(["approveon"]) & filters.group)
-async def approve_on(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # Check if user is admin
-    if not await is_admin_or_owner(client, chat_id, user_id):
-        # Delete command if user doesn't have rights
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("You need to be an admin to use this command.")
+# Handle mafia game join button
+@pr0fess0r_99.on_callback_query(filters.regex("^join_mafia$"))
+async def join_mafia_callback(client, callback_query):
+    chat_id = callback_query.message.chat.id
+    user_id = callback_query.from_user.id
+    
+    # Check if game exists
+    if chat_id not in mafia_games:
+        await callback_query.answer("This game no longer exists.", show_alert=True)
         return
-
-    # Enable auto-approve for this chat
-    if chat_id not in chat_settings:
-        chat_settings[chat_id] = {}
-
-    chat_settings[chat_id]["approve"] = True
-
-    await message.reply("✅ Auto-approve has been enabled for this chat.")
-
-@pr0fess0r_99.on_message(filters.command(["approveoff"]) & filters.group)
-async def approve_off(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # Check if user is admin
-    if not await is_admin_or_owner(client, chat_id, user_id):
-        # Delete command if user doesn't have rights
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("You need to be an admin to use this command.")
+    
+    # Check if game is already active
+    if mafia_games[chat_id]["active"]:
+        await callback_query.answer("Game already started. Wait for the next one.", show_alert=True)
         return
+    
+    # Check if user already joined
+    if user_id in mafia_games[chat_id]["players"]:
+        await callback_query.answer("You already joined this game!", show_alert=True)
+        return
+    
+    # Add user to players
+    mafia_games[chat_id]["players"][user_id] = callback_query.from_user.first_name
+    
+    # Update message with new player count
+    player_count = len(mafia_games[chat_id]["players"])
+    min_players = mafia_games[chat_id]["min_players"]
+    remaining_time = int(mafia_games[chat_id]["end_time"] - time.time())
+    
+    if remaining_time < 0:
+        remaining_time = 0
+    
+    try:
+        await client.edit_message_text(
+            chat_id=chat_id,
+            message_id=mafia_games[chat_id]["message_id"],
+            text=f"🎮 **Mafia Game**\n\n"
+                f"A new Mafia game is starting! Click the button below to join.\n\n"
+                f"Minimum players needed: {min_players}\n"
+                f"Players joined: {player_count}/{min_players}\n\n"
+                f"Game will start automatically in {remaining_time} seconds or when enough players join."
+                f"Creator: {(await client.get_users(mafia_games[chat_id]['creator'])).mention}",
+            reply_markup=callback_query.message.reply_markup
+        )
+    except Exception as e:
+        print(f"Error updating mafia message: {e}")
+    
+    await callback_query.answer("You joined the game!")
+    
+    # Auto-start if we have enough players
+    if player_count >= min_players:
+        asyncio.create_task(start_mafia_game(client, chat_id))
 
-    # Disable auto-approve for this chat
-    if chat_id not in chat_settings:
-        chat_settings[chat_id] = {}
+# Handle mafia game start button
+@pr0fess0r_99.on_callback_query(filters.regex("^start_mafia$"))
+async def start_mafia_callback(client, callback_query):
+    chat_id = callback_query.message.chat.id
+    user_id = callback_query.from_user.id
+    
+    # Check if game exists
+    if chat_id not in mafia_games:
+        await callback_query.answer("This game no longer exists.", show_alert=True)
+        return
+    
+    # Check if game is already active
+    if mafia_games[chat_id]["active"]:
+        await callback_query.answer("Game already started.", show_alert=True)
+        return
+    
+    # Only creator or admin can force start
+    if user_id != mafia_games[chat_id]["creator"] and not await is_admin_or_owner(client, chat_id, user_id):
+        await callback_query.answer("Only the game creator or an admin can start the game.", show_alert=True)
+        return
+    
+    # Check if we have minimum players
+    if len(mafia_games[chat_id]["players"]) < 5:
+        await callback_query.answer("Need at least 5 players to start the game.", show_alert=True)
+        return
+    
+    await callback_query.answer("Starting the game!")
+    asyncio.create_task(start_mafia_game(client, chat_id))
 
-    chat_settings[chat_id]["approve"] = False
+# Helper function to start mafia game after timeout
+async def start_mafia_game_after_timeout(client, chat_id):
+    await asyncio.sleep(60)  # Wait 60 seconds
+    
+    # Check if game exists and hasn't started yet
+    if chat_id in mafia_games and not mafia_games[chat_id]["active"]:
+        await start_mafia_game(client, chat_id)
 
-    await message.reply("❌ Auto-approve has been disabled for this chat.")
+# Helper function to start the mafia game
+async def start_mafia_game(client, chat_id):
+    # Check if game exists
+    if chat_id not in mafia_games:
+        return
+    
+    # Check if game already started
+    if mafia_games[chat_id]["active"]:
+        return
+    
+    # Get players
+    players = mafia_games[chat_id]["players"]
+    min_players = mafia_games[chat_id]["min_players"]
+    
+    # Check if we have enough players
+    if len(players) < 5:  # Minimum 5 players required
+        try:
+            await client.send_message(
+                chat_id=chat_id,
+                text=f"❌ Not enough players joined the Mafia game. Needed at least 5, but only {len(players)} joined."
+            )
+        except Exception as e:
+            print(f"Error sending mafia game cancellation: {e}")
+        
+        # Clean up
+        del mafia_games[chat_id]
+        return
+    
+    # Mark game as active
+    mafia_games[chat_id]["active"] = True
+    
+    # Assign roles
+    player_ids = list(players.keys())
+    num_players = len(player_ids)
+    
+    # Calculate role counts
+    mafia_count = max(1, num_players // 5)  # 20% are mafia
+    detective_count = 1
+    doctor_count = 1
+    civilian_count = num_players - mafia_count - detective_count - doctor_count
+    
+    # Create role list and shuffle
+    roles = ["Mafia"] * mafia_count + ["Detective"] * detective_count + ["Doctor"] * doctor_count + ["Civilian"] * civilian_count
+    random.shuffle(roles)
+    
+    # Assign roles to players
+    role_assignments = {}
+    for i, player_id in enumerate(player_ids):
+        role_assignments[player_id] = roles[i]
+    
+    mafia_games[chat_id]["roles"] = role_assignments
+    
+    # Send game start message
+    game_msg = "🎭 **Mafia Game Started**\n\n"
+    game_msg += f"**Total Players:** {num_players}\n"
+    game_msg += f"**Mafia:** {mafia_count}\n"
+    game_msg += f"**Detective:** {detective_count}\n"
+    game_msg += f"**Doctor:** {doctor_count}\n"
+    game_msg += f"**Civilians:** {civilian_count}\n\n"
+    game_msg += "**Players:**\n"
+    
+    # List all players
+    for player_id, player_name in players.items():
+        try:
+            user = await client.get_users(player_id)
+            game_msg += f"• {user.mention}\n"
+        except:
+            game_msg += f"• {player_name}\n"
+    
+    game_msg += "\nRoles have been sent to each player via private message. The game will be managed manually by the players."
+    
+    await client.send_message(chat_id=chat_id, text=game_msg)
+    
+    # Send private messages to each player with their role
+    for player_id, role in role_assignments.items():
+        try:
+            # Create role-specific instructions
+            if role == "Mafia":
+                role_msg = "🔪 You are a **Mafia**!\n\nYour goal is to eliminate all civilians without being caught."
+                # List other mafia members if there are multiple
+                if mafia_count > 1:
+                    role_msg += "\n\n**Other Mafia members:**\n"
+                    for p_id, p_role in role_assignments.items():
+                        if p_id != player_id and p_role == "Mafia":
+                            try:
+                                p_user = await client.get_users(p_id)
+                                role_msg += f"• {p_user.first_name} ({p_user.id})\n"
+                            except:
+                                role_msg += f"• {players[p_id]}\n"
+            elif role == "Detective":
+                role_msg = "🔍 You are a **Detective**!\n\nYour goal is to find all mafia members. You can investigate one player each night."
+            elif role == "Doctor":
+                role_msg = "💉 You are a **Doctor**!\n\nYour goal is to protect civilians. You can save one player each night."
+            else:  # Civilian
+                role_msg = "👨‍💼 You are a **Civilian**!\n\nYour goal is to find and eliminate all mafia members through discussion and voting."
+            
+            # Send private message with role
+            await client.send_message(
+                chat_id=player_id,
+                text=f"**Mafia Game in {(await client.get_chat(chat_id)).title}**\n\n{role_msg}"
+            )
+        except Exception as e:
+            print(f"Error sending role to player {player_id}: {e}")
+    
+    # Update leaderboard
+    if "mafia_leaderboard" not in bot_stats:
+        bot_stats["mafia_leaderboard"] = {}
+    
+    # Game will be managed manually by players
+    # We'll keep the game data for leaderboard purposes
+    
+    # Schedule cleanup after 2 hours
+    asyncio.create_task(cleanup_mafia_game(client, chat_id))
+
+# Helper function to clean up mafia game after it's done
+async def cleanup_mafia_game(client, chat_id):
+    await asyncio.sleep(7200)  # 2 hours
+    
+    if chat_id in mafia_games:
+        # Send game end message
+        try:
+            await client.send_message(
+                chat_id=chat_id,
+                text="🎮 The Mafia game session has ended. Start a new game with /mafia command!"
+            )
+        except:
+            pass
+        
+        # Clean up
+        del mafia_games[chat_id]
+
+# Mafia leaderboard command
+@pr0fess0r_99.on_message(filters.command(["mafialeaderboard", "mafiascore"]) & filters.group)
+async def mafia_leaderboard(client, message):
+    if "mafia_leaderboard" not in bot_stats or not bot_stats["mafia_leaderboard"]:
+        await message.reply("No Mafia games have been played yet.")
+        return
+    
+    leaderboard_text = "🎮 **Mafia Game Leaderboard**\n\n"
+    
+    # Sort players by wins
+    sorted_players = sorted(bot_stats["mafia_leaderboard"].items(), key=lambda x: x[1]["wins"], reverse=True)
+    
+    # Show top 10
+    for i, (player_id, stats) in enumerate(sorted_players[:10], 1):
+        try:
+            user = await client.get_users(player_id)
+            player_name = user.first_name
+        except:
+            player_name = f"User {player_id}"
+        
+        wins = stats.get("wins", 0)
+        games = stats.get("games", 0)
+        win_rate = (wins / games * 100) if games > 0 else 0
+        
+        leaderboard_text += f"{i}. {player_name} - **{wins}** wins ({games} games, {win_rate:.1f}% win rate)\n"
+    
+    await message.reply(leaderboard_text)
 
 # Ban command
 @pr0fess0r_99.on_message(filters.command(["ban"]) & filters.group)
@@ -884,15 +1046,14 @@ async def ban_user(client, message):
                 reason = message.text.split(" ", 2)[2]
         else:
             # Try to get user from username
-            try:
-                target_user = await client.get_users(message.command[1].replace("@", ""))
-                target_user_id = target_user.id
-                # Check if there's a reason provided
-                if len(message.text.split(" ", 2)) > 2:
-                    reason = message.text.split(" ", 2)[2]
-            except Exception as e:
-                await message.reply(f"Error finding user: {e}")
+            target_user_id = await find_user_in_chat(client, chat_id, message.command[1])
+            if not target_user_id:
+                await message.reply("User not found in this chat.")
                 return
+                
+            # Check if there's a reason provided
+            if len(message.text.split(" ", 2)) > 2:
+                reason = message.text.split(" ", 2)[2]
 
     if not target_user_id:
         await message.reply("Please specify a user to ban by replying to their message or providing their ID/username.")
@@ -920,16 +1081,29 @@ async def ban_user(client, message):
 
     # Ban the user
     try:
-        await client.ban_chat_member(chat_id, target_user_id)
-
         # Get user info for the message
         try:
             banned_user = await client.get_users(target_user_id)
-            ban_message = f"🚫 {banned_user.mention} has been banned.\n**Reason:** {reason}"
+            user_mention = banned_user.mention
         except:
-            ban_message = f"🚫 User with ID {target_user_id} has been banned.\n**Reason:** {reason}"
+            user_mention = f"User {target_user_id}"
 
+        # Ban the user from the chat
+        await client.ban_chat_member(chat_id, target_user_id)
+        
+        # Send notification in the group
+        ban_message = f"🚫 {user_mention} has been banned.\n**Reason:** {reason}"
         await message.reply(ban_message)
+        
+        # Send notification to the banned user
+        try:
+            chat = await client.get_chat(chat_id)
+            await client.send_message(
+                target_user_id,
+                f"You have been banned from {chat.title}.\n**Reason:** {reason}"
+            )
+        except:
+            pass  # User might have blocked the bot
     except Exception as e:
         await message.reply(f"Error banning user: {e}")
 
@@ -957,16 +1131,14 @@ async def unban_user(client, message):
         target_user_id = message.reply_to_message.from_user.id
     # If command has arguments (user_id or username)
     elif len(message.command) > 1:
-        # Try to get user_id from command
+        # First argument could be user_id or username
         if message.command[1].isdigit():
             target_user_id = int(message.command[1])
         else:
             # Try to get user from username
-            try:
-                target_user = await client.get_users(message.command[1].replace("@", ""))
-                target_user_id = target_user.id
-            except Exception as e:
-                await message.reply(f"Error finding user: {e}")
+            target_user_id = await find_user_in_chat(client, chat_id, message.command[1])
+            if not target_user_id:
+                await message.reply("User not found.")
                 return
 
     if not target_user_id:
@@ -975,15 +1147,18 @@ async def unban_user(client, message):
 
     # Unban the user
     try:
-        await client.unban_chat_member(chat_id, target_user_id)
-
         # Get user info for the message
         try:
             unbanned_user = await client.get_users(target_user_id)
-            unban_message = f"✅ {unbanned_user.mention} has been unbanned."
+            user_mention = unbanned_user.mention
         except:
-            unban_message = f"✅ User with ID {target_user_id} has been unbanned."
+            user_mention = f"User {target_user_id}"
 
+        # Unban the user from the chat
+        await client.unban_chat_member(chat_id, target_user_id)
+        
+        # Send notification in the group
+        unban_message = f"✅ {user_mention} has been unbanned."
         await message.reply(unban_message)
     except Exception as e:
         await message.reply(f"Error unbanning user: {e}")
@@ -1024,15 +1199,14 @@ async def mute_user(client, message):
                 reason = message.text.split(" ", 2)[2]
         else:
             # Try to get user from username
-            try:
-                target_user = await client.get_users(message.command[1].replace("@", ""))
-                target_user_id = target_user.id
-                # Check if there's a reason provided
-                if len(message.text.split(" ", 2)) > 2:
-                    reason = message.text.split(" ", 2)[2]
-            except Exception as e:
-                await message.reply(f"Error finding user: {e}")
+            target_user_id = await find_user_in_chat(client, chat_id, message.command[1])
+            if not target_user_id:
+                await message.reply("User not found in this chat.")
                 return
+                
+            # Check if there's a reason provided
+            if len(message.text.split(" ", 2)) > 2:
+                reason = message.text.split(" ", 2)[2]
 
     if not target_user_id:
         await message.reply("Please specify a user to mute by replying to their message or providing their ID/username.")
@@ -1060,8 +1234,16 @@ async def mute_user(client, message):
 
     # Mute the user
     try:
+        # Get user info for the message
+        try:
+            muted_user = await client.get_users(target_user_id)
+            user_mention = muted_user.mention
+        except:
+            user_mention = f"User {target_user_id}"
+
+        # Mute the user in the chat
         await client.restrict_chat_member(
-            chat_id, 
+            chat_id,
             target_user_id,
             ChatPermissions(
                 can_send_messages=False,
@@ -1070,15 +1252,20 @@ async def mute_user(client, message):
                 can_add_web_page_previews=False
             )
         )
-
-        # Get user info for the message
-        try:
-            muted_user = await client.get_users(target_user_id)
-            mute_message = f"🔇 {muted_user.mention} has been muted.\n**Reason:** {reason}"
-        except:
-            mute_message = f"🔇 User with ID {target_user_id} has been muted.\n**Reason:** {reason}"
-
+        
+        # Send notification in the group
+        mute_message = f"🔇 {user_mention} has been muted.\n**Reason:** {reason}"
         await message.reply(mute_message)
+        
+        # Send notification to the muted user
+        try:
+            chat = await client.get_chat(chat_id)
+            await client.send_message(
+                target_user_id,
+                f"You have been muted in {chat.title}.\n**Reason:** {reason}"
+            )
+        except:
+            pass  # User might have blocked the bot
     except Exception as e:
         await message.reply(f"Error muting user: {e}")
 
@@ -1106,16 +1293,14 @@ async def unmute_user(client, message):
         target_user_id = message.reply_to_message.from_user.id
     # If command has arguments (user_id or username)
     elif len(message.command) > 1:
-        # Try to get user_id from command
+        # First argument could be user_id or username
         if message.command[1].isdigit():
             target_user_id = int(message.command[1])
         else:
             # Try to get user from username
-            try:
-                target_user = await client.get_users(message.command[1].replace("@", ""))
-                target_user_id = target_user.id
-            except Exception as e:
-                await message.reply(f"Error finding user: {e}")
+            target_user_id = await find_user_in_chat(client, chat_id, message.command[1])
+            if not target_user_id:
+                await message.reply("User not found in this chat.")
                 return
 
     if not target_user_id:
@@ -1124,8 +1309,16 @@ async def unmute_user(client, message):
 
     # Unmute the user
     try:
+        # Get user info for the message
+        try:
+            unmuted_user = await client.get_users(target_user_id)
+            user_mention = unmuted_user.mention
+        except:
+            user_mention = f"User {target_user_id}"
+
+        # Unmute the user in the chat
         await client.restrict_chat_member(
-            chat_id, 
+            chat_id,
             target_user_id,
             ChatPermissions(
                 can_send_messages=True,
@@ -1134,162 +1327,14 @@ async def unmute_user(client, message):
                 can_add_web_page_previews=True
             )
         )
-
-        # Get user info for the message
-        try:
-            unmuted_user = await client.get_users(target_user_id)
-            unmute_message = f"🔊 {unmuted_user.mention} has been unmuted."
-        except:
-            unmute_message = f"🔊 User with ID {target_user_id} has been unmuted."
-
+        
+        # Send notification in the group
+        unmute_message = f"🔊 {user_mention} has been unmuted."
         await message.reply(unmute_message)
     except Exception as e:
         await message.reply(f"Error unmuting user: {e}")
-# ... existing code ...
 
-# Broadcast command - Restricted to maintenance team
-@pr0fess0r_99.on_message(filters.command(["broadcast"]))
-# Broadcast command - Restricted to maintenance team
-@pr0fess0r_99.on_message(filters.command(["broadcast"]))
-async def broadcast_message(client, message):
-    user_id = message.from_user.id
-    
-    # Check if user is in maintenance team
-    if not await is_maintenance_team(user_id):
-        # Delete command if user is not authorized
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("This command is restricted to maintenance team only.")
-        return
-    
-    # Check if there's a message to broadcast
-    if len(message.text.split("\n", 1)) < 2 and not message.reply_to_message:
-        await message.reply(
-            "Please provide a message to broadcast.\n\nExample:\n`/broadcast\nHello everyone! This is an announcement.`\n\n"
-            "Or reply to a message with `/broadcast`"
-        )
-        return
-    
-    # Get the message to broadcast
-    if message.reply_to_message:
-        broadcast_text = message.reply_to_message.text or message.reply_to_message.caption or ""
-        # If replying to media
-        media = None
-        if message.reply_to_message.photo:
-            media = message.reply_to_message.photo.file_id
-            media_type = "photo"
-        elif message.reply_to_message.video:
-            media = message.reply_to_message.video.file_id
-            media_type = "video"
-        elif message.reply_to_message.document:
-            media = message.reply_to_message.document.file_id
-            media_type = "document"
-        elif message.reply_to_message.audio:
-            media = message.reply_to_message.audio.file_id
-            media_type = "audio"
-        elif message.reply_to_message.voice:
-            media = message.reply_to_message.voice.file_id
-            media_type = "voice"
-    else:
-        broadcast_text = message.text.split("\n", 1)[1]
-        media = None
-        media_type = None
-    
-    # Start broadcasting
-    status_message = await message.reply("🔄 Starting broadcast...")
-    
-    # Instead of get_dialogs, we'll use a stored list of chat IDs
-    # We need to maintain a list of chats where the bot is added
-    # For now, we'll use a simple approach - broadcast to all chats where the bot has received messages
-    
-    # Get all unique chat IDs from recent messages
-    # This is a workaround since bots can't use get_dialogs
-    all_chats = []
-    
-    # If you have a database or file storing chat IDs, you should load them here
-    # For this example, we'll just use the current chat as a demonstration
-    all_chats.append(message.chat.id)
-    
-    # You should implement a proper chat tracking system
-    # For example, whenever the bot is added to a group or receives a message,
-    # store that chat ID in a database or file
-    
-    if not all_chats:
-        await status_message.edit_text("No chats found to broadcast to.")
-        return
-    
-    # Initialize counters
-    success_count = 0
-    failed_count = 0
-    
-    # Update status message
-    await status_message.edit_text(f"🔄 Broadcasting to {len(all_chats)} chats...")
-    
-    # Send message to each chat
-    for i, chat_id in enumerate(all_chats):
-        try:
-            if media:
-                if media_type == "photo":
-                    await client.send_photo(chat_id, media, caption=broadcast_text)
-                elif media_type == "video":
-                    await client.send_video(chat_id, media, caption=broadcast_text)
-                elif media_type == "document":
-                    await client.send_document(chat_id, media, caption=broadcast_text)
-                elif media_type == "audio":
-                    await client.send_audio(chat_id, media, caption=broadcast_text)
-                elif media_type == "voice":
-                    await client.send_voice(chat_id, media, caption=broadcast_text)
-            else:
-                await client.send_message(chat_id, broadcast_text)
-            
-            success_count += 1
-            
-            # Update status every 10 chats
-            if i % 10 == 0:
-                await status_message.edit_text(
-                    f"🔄 Broadcasting: {i+1}/{len(all_chats)} chats\n"
-                    f"✅ Success: {success_count}\n"
-                    f"❌ Failed: {failed_count}"
-                )
-            
-            # Add a small delay to avoid flood limits
-            await asyncio.sleep(0.5)
-        except FloodWait as e:
-            await status_message.edit_text(f"Hit rate limit. Waiting for {e.x} seconds...")
-            await asyncio.sleep(e.x)
-            # Try again
-            try:
-                if media:
-                    if media_type == "photo":
-                        await client.send_photo(chat_id, media, caption=broadcast_text)
-                    elif media_type == "video":
-                        await client.send_video(chat_id, media, caption=broadcast_text)
-                    elif media_type == "document":
-                        await client.send_document(chat_id, media, caption=broadcast_text)
-                    elif media_type == "audio":
-                        await client.send_audio(chat_id, media, caption=broadcast_text)
-                    elif media_type == "voice":
-                        await client.send_voice(chat_id, media, caption=broadcast_text)
-                else:
-                    await client.send_message(chat_id, broadcast_text)
-                success_count += 1
-            except Exception:
-                failed_count += 1
-        except Exception as e:
-            print(f"Error broadcasting to {chat_id}: {e}")
-            failed_count += 1
-    
-    # Final status update
-    await status_message.edit_text(
-        f"✅ Broadcast completed!\n\n"
-        f"📊 **Statistics:**\n"
-        f"• Total chats: {len(all_chats)}\n"
-        f"• Successful: {success_count}\n"
-        f"• Failed: {failed_count}"
-    )
-# Global ban command - Restricted to maintenance team
+# Global ban command
 @pr0fess0r_99.on_message(filters.command(["gban"]))
 async def global_ban(client, message):
     user_id = message.from_user.id
@@ -1360,7 +1405,7 @@ async def global_ban(client, message):
 
     await message.reply(ban_message)
 
-# Global unban command - Restricted to maintenance team
+# Global unban command
 @pr0fess0r_99.on_message(filters.command(["ungban"]))
 async def global_unban(client, message):
     user_id = message.from_user.id
@@ -1414,24 +1459,267 @@ async def global_unban(client, message):
     else:
         await message.reply("This user is not globally banned.")
 
-# Refresh command - Can be used by anyone in a group
-@pr0fess0r_99.on_message(filters.command(["refresh"]) & filters.group)
-async def refresh_settings(client, message):
-    chat_id = message.chat.id
+# Global mute command
+@pr0fess0r_99.on_message(filters.command(["gmute"]))
+async def global_mute(client, message):
+    user_id = message.from_user.id
 
-    # Reset chat settings for this chat
-    if chat_id in chat_settings:
-        # Keep welcome text if it exists
-        welcome_text = chat_settings[chat_id].get("welcome_text", None)
-        chat_settings[chat_id] = {}
-        if welcome_text:
-            chat_settings[chat_id]["welcome_text"] = welcome_text
+    # Check if user is in maintenance team
+    if not await is_maintenance_team(user_id):
+        # Delete command if user is not authorized
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.reply("This command is restricted to maintenance team only.")
+        return
 
-    await message.reply("✅ Bot settings have been refreshed for this chat.")
+    # Check if the command has a reply or a user mention
+    target_user_id = None
+    reason = "No reason provided"
+
+    # If command is a reply to a message
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target_user_id = message.reply_to_message.from_user.id
+        # Check if there's a reason provided
+        if len(message.text.split(" ", 1)) > 1:
+            reason = message.text.split(" ", 1)[1]
+    # If command has arguments (user_id/username and optional reason)
+    elif len(message.command) > 1:
+        # First argument could be user_id or username
+        if message.command[1].isdigit():
+            target_user_id = int(message.command[1])
+            # Check if there's a reason provided
+            if len(message.text.split(" ", 2)) > 2:
+                reason = message.text.split(" ", 2)[2]
+        else:
+            # Try to get user from username
+            try:
+                target_user = await client.get_users(message.command[1].replace("@", ""))
+                target_user_id = target_user.id
+                # Check if there's a reason provided
+                if len(message.text.split(" ", 2)) > 2:
+                    reason = message.text.split(" ", 2)[2]
+            except Exception as e:
+                await message.reply(f"Error finding user: {e}")
+                return
+
+    if not target_user_id:
+        await message.reply("Please specify a user to globally mute by replying to their message or providing their ID/username.")
+        return
+
+    # Don't allow muting self
+    if target_user_id == user_id:
+        await message.reply("You cannot mute yourself.")
+        return
+
+    # Don't allow muting bot owners or sudo users
+    if target_user_id in BOT_OWNERS or target_user_id in SUDO_USERS:
+        await message.reply("Cannot mute bot maintenance team members.")
+        return
+
+    # Add user to global mute list
+    muted_users.add(target_user_id)
+
+    # Get user info for the message
+    try:
+        muted_user = await client.get_users(target_user_id)
+        mute_message = f"🌐 {muted_user.mention} has been globally muted.\n**Reason:** {reason}"
+    except:
+        mute_message = f"🌐 User with ID {target_user_id} has been globally muted.\n**Reason:** {reason}"
+
+    await message.reply(mute_message)
+
+# Global unmute command
+@pr0fess0r_99.on_message(filters.command(["ungmute"]))
+async def global_unmute(client, message):
+    user_id = message.from_user.id
+
+    # Check if user is in maintenance team
+    if not await is_maintenance_team(user_id):
+        # Delete command if user is not authorized
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.reply("This command is restricted to maintenance team only.")
+        return
+
+    # Check if the command has a reply or a user mention
+    target_user_id = None
+
+    # If command is a reply to a message
+    if message.reply_to_message and message.reply_to_message.from_user:
+        target_user_id = message.reply_to_message.from_user.id
+    # If command has arguments (user_id or username)
+    elif len(message.command) > 1:
+        # Try to get user_id from command
+        if message.command[1].isdigit():
+            target_user_id = int(message.command[1])
+        else:
+            # Try to get user from username
+            try:
+                target_user = await client.get_users(message.command[1].replace("@", ""))
+                target_user_id = target_user.id
+            except Exception as e:
+                await message.reply(f"Error finding user: {e}")
+                return
+
+    if not target_user_id:
+        await message.reply("Please specify a user to globally unmute by replying to their message or providing their ID/username.")
+        return
+
+    # Remove user from global mute list
+    if target_user_id in muted_users:
+        muted_users.remove(target_user_id)
+
+        # Get user info for the message
+        try:
+            unmuted_user = await client.get_users(target_user_id)
+            unmute_message = f"🌐 {unmuted_user.mention} has been globally unmuted."
+        except:
+            unmute_message = f"🌐 User with ID {target_user_id} has been globally unmuted."
+
+        await message.reply(unmute_message)
+    else:
+        await message.reply("This user is not globally muted.")
+
+# Helper function to check if user is in maintenance team (bot owners or sudo users)
+async def is_maintenance_team(user_id):
+    return user_id in BOT_OWNERS or user_id in SUDO_USERS
+
+# Helper function to check if user has ban rights
+async def has_ban_rights(client, chat_id, user_id):
+    # Bot owners and sudo users always have ban rights
+    if await is_maintenance_team(user_id):
+        return True
+    
+    # Check if user is admin with ban rights
+    try:
+        member = await client.get_chat_member(chat_id, user_id)
+        if member.status == "creator":
+            return True
+        if member.status == "administrator" and member.can_restrict_members:
+            return True
+    except Exception:
+        pass
+    
+    return False
+
+# Helper function to check if user is admin or owner
+async def is_admin_or_owner(client, chat_id, user_id):
+    # Bot owners and sudo users are always considered admins
+    if await is_maintenance_team(user_id):
+        return True
+    
+    # Check if user is admin
+    try:
+        member = await client.get_chat_member(chat_id, user_id)
+        if member.status in ["creator", "administrator"]:
+            return True
+    except Exception:
+        pass
+    
+    return False
+
+# Helper function to find a user in a chat by username
+async def find_user_in_chat(client, chat_id, username):
+    username = username.replace("@", "")
+    
+    try:
+        # Try to get user directly by username
+        user = await client.get_users(username)
+        if user:
+            return user.id
+    except:
+        pass
+    
+    # If direct lookup fails, search through chat members
+    try:
+        async for member in client.get_chat_members(chat_id):
+            if member.user.username and member.user.username.lower() == username.lower():
+                return member.user.id
+    except Exception:
+        pass
+    
+    return None
+
+# Save bot stats periodically
+async def save_stats_periodically():
+    while True:
+        await asyncio.sleep(300)  # Save every 5 minutes
+        save_stats()
+
+# Save stats to file
+def save_stats():
+    try:
+        with open("bot_stats.json", "w") as f:
+            json.dump(bot_stats, f)
+    except Exception as e:
+        print(f"Error saving stats: {e}")
+
+# Load stats from file
+def load_stats():
+    global bot_stats
+    try:
+        if os.path.exists("bot_stats.json"):
+            with open("bot_stats.json", "r") as f:
+                bot_stats = json.load(f)
+    except Exception as e:
+        print(f"Error loading stats: {e}")
+
+# Save chat settings periodically
+async def save_settings_periodically():
+    while True:
+        await asyncio.sleep(300)  # Save every 5 minutes
+        save_settings()
+
+# Save settings to file
+def save_settings():
+    try:
+        with open("chat_settings.json", "w") as f:
+            json.dump(chat_settings, f)
+    except Exception as e:
+        print(f"Error saving settings: {e}")
+
+# Load settings from file
+def load_settings():
+    global chat_settings
+    try:
+        if os.path.exists("chat_settings.json"):
+            with open("chat_settings.json", "r") as f:
+                chat_settings = json.load(f)
+    except Exception as e:
+        print(f"Error loading settings: {e}")
+
+# Main function to start the bot
+async def main():
+    # Load stats and settings
+    load_stats()
+    load_settings()
+    
+    # Start periodic saving tasks
+    asyncio.create_task(save_stats_periodically())
+    asyncio.create_task(save_settings_periodically())
+    
+    # Start the bot
+    await pr0fess0r_99.start()
+    
+    # Get bot info
+    bot_info = await pr0fess0r_99.get_me()
+    print(f"Bot started as @{bot_info.username}")
+    
+    # Keep the bot running
+    await idle()
+    
+    # Save stats and settings before stopping
+    save_stats()
+    save_settings()
+    
+    # Stop the bot
+    await pr0fess0r_99.stop()
 
 # Run the bot
-print("Bot is starting...")
-
-# --- Keep Alive Server ---
-
-pr0fess0r_99.run()
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
