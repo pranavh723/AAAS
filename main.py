@@ -1145,7 +1145,140 @@ async def unmute_user(client, message):
         await message.reply(unmute_message)
     except Exception as e:
         await message.reply(f"Error unmuting user: {e}")
+# ... existing code ...
 
+# Broadcast command - Restricted to maintenance team
+@pr0fess0r_99.on_message(filters.command(["broadcast"]))
+async def broadcast_message(client, message):
+    user_id = message.from_user.id
+    
+    # Check if user is in maintenance team
+    if not await is_maintenance_team(user_id):
+        # Delete command if user is not authorized
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.reply("This command is restricted to maintenance team only.")
+        return
+    
+    # Check if there's a message to broadcast
+    if len(message.text.split("\n", 1)) < 2 and not message.reply_to_message:
+        await message.reply(
+            "Please provide a message to broadcast.\n\nExample:\n`/broadcast\nHello everyone! This is an announcement.`\n\n"
+            "Or reply to a message with `/broadcast`"
+        )
+        return
+    
+    # Get the message to broadcast
+    if message.reply_to_message:
+        broadcast_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+        # If replying to media
+        media = None
+        if message.reply_to_message.photo:
+            media = message.reply_to_message.photo.file_id
+            media_type = "photo"
+        elif message.reply_to_message.video:
+            media = message.reply_to_message.video.file_id
+            media_type = "video"
+        elif message.reply_to_message.document:
+            media = message.reply_to_message.document.file_id
+            media_type = "document"
+        elif message.reply_to_message.audio:
+            media = message.reply_to_message.audio.file_id
+            media_type = "audio"
+        elif message.reply_to_message.voice:
+            media = message.reply_to_message.voice.file_id
+            media_type = "voice"
+    else:
+        broadcast_text = message.text.split("\n", 1)[1]
+        media = None
+        media_type = None
+    
+    # Start broadcasting
+    status_message = await message.reply("🔄 Starting broadcast...")
+    
+    # Get all chats where the bot is present
+    all_chats = []
+    async for dialog in client.get_dialogs():
+        if dialog.chat.type in ["group", "supergroup", "channel"]:
+            all_chats.append(dialog.chat.id)
+    
+    if not all_chats:
+        await status_message.edit_text("No chats found to broadcast to.")
+        return
+    
+    # Initialize counters
+    success_count = 0
+    failed_count = 0
+    
+    # Update status message
+    await status_message.edit_text(f"🔄 Broadcasting to {len(all_chats)} chats...")
+    
+    # Send message to each chat
+    for i, chat_id in enumerate(all_chats):
+        try:
+            if media:
+                if media_type == "photo":
+                    await client.send_photo(chat_id, media, caption=broadcast_text)
+                elif media_type == "video":
+                    await client.send_video(chat_id, media, caption=broadcast_text)
+                elif media_type == "document":
+                    await client.send_document(chat_id, media, caption=broadcast_text)
+                elif media_type == "audio":
+                    await client.send_audio(chat_id, media, caption=broadcast_text)
+                elif media_type == "voice":
+                    await client.send_voice(chat_id, media, caption=broadcast_text)
+            else:
+                await client.send_message(chat_id, broadcast_text)
+            
+            success_count += 1
+            
+            # Update status every 10 chats
+            if i % 10 == 0:
+                await status_message.edit_text(
+                    f"🔄 Broadcasting: {i+1}/{len(all_chats)} chats\n"
+                    f"✅ Success: {success_count}\n"
+                    f"❌ Failed: {failed_count}"
+                )
+            
+            # Add a small delay to avoid flood limits
+            await asyncio.sleep(0.5)
+        except FloodWait as e:
+            await status_message.edit_text(f"Hit rate limit. Waiting for {e.x} seconds...")
+            await asyncio.sleep(e.x)
+            # Try again
+            try:
+                if media:
+                    if media_type == "photo":
+                        await client.send_photo(chat_id, media, caption=broadcast_text)
+                    elif media_type == "video":
+                        await client.send_video(chat_id, media, caption=broadcast_text)
+                    elif media_type == "document":
+                        await client.send_document(chat_id, media, caption=broadcast_text)
+                    elif media_type == "audio":
+                        await client.send_audio(chat_id, media, caption=broadcast_text)
+                    elif media_type == "voice":
+                        await client.send_voice(chat_id, media, caption=broadcast_text)
+                else:
+                    await client.send_message(chat_id, broadcast_text)
+                success_count += 1
+            except Exception:
+                failed_count += 1
+        except Exception as e:
+            print(f"Error broadcasting to {chat_id}: {e}")
+            failed_count += 1
+    
+    # Final status update
+    await status_message.edit_text(
+        f"✅ Broadcast completed!\n\n"
+        f"📊 **Statistics:**\n"
+        f"• Total chats: {len(all_chats)}\n"
+        f"• Successful: {success_count}\n"
+        f"• Failed: {failed_count}"
+    )
+
+# ... rest of your code ...
 # Global ban command - Restricted to maintenance team
 @pr0fess0r_99.on_message(filters.command(["gban"]))
 async def global_ban(client, message):
