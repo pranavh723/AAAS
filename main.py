@@ -1,16 +1,15 @@
 import os
 import random
 import time
-import json
-from pyrogram import Client, filters, idle
+from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, User, ChatJoinRequest, ChatPermissions
-from pyrogram.errors import FloodWait, UserNotParticipant, ChatAdminRequired, UsernameInvalid, PeerIdInvalid
+from pyrogram.errors import FloodWait, UserNotParticipant, ChatAdminRequired
 import asyncio
 from keepalive import keep_alive
 keep_alive()
 
 # Bot owners and sudo users lists
-BOT_OWNERS = [6985505204, 7335254391]  # List of bot owner IDs
+BOT_OWNERS = [6985505204,7335254391]  # List of bot owner IDs
 SUDO_USERS = set()  # Set of sudo users who have owner-like privileges
 
 # Try to import TgCrypto for better performance
@@ -25,7 +24,7 @@ os.environ["BOT_TOKEN"] = "7399953040:AAGjsk0m1W5ymXq2KESrYsTf2-wMb2xLKVg"
 os.environ["API_ID"] = "25056303"
 os.environ["API_HASH"] = "423f1e11581ff494841681fc66e9c8e6"
 os.environ["APPROVED_WELCOME_TEXT"] = "Hello {mention} Welcome to {title} Your request was approved!"
-
+BOT_OWNERS = [6985505204] 
 # Bot maintenance team configuration
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))  # Main bot owner
 if os.environ.get("SUDO_USERS"):
@@ -66,20 +65,12 @@ chat_settings = {}
 # Store globally banned users
 banned_users = set()
 
-# Store globally muted users
-muted_users = set()
-
 # Store tagging state
 tagging_in_progress = {}
 tagged_users = {}
 
-# Store mafia games
-mafia_games = {}
-
-# Store removed users for each chat
-removed_users = {}
-
 # Helper functions
+# Remove the duplicate functions and keep only the fixed versions
 async def is_maintenance_team(user_id):
     """Check if user is in the maintenance team (owner or sudo)"""
     return user_id in BOT_OWNERS or user_id == OWNER_ID or user_id in SUDO_USERS
@@ -93,11 +84,10 @@ async def is_admin_or_owner(client, chat_id, user_id):
     try:
         # Get the chat member information directly
         member = await client.get_chat_member(chat_id, user_id)
+        # Print debug info
+        print(f"Admin check for {user_id} in {chat_id}: status={member.status}")
         # Check if user is creator or administrator
         return member.status in ["creator", "administrator"] or "owner" in str(member.status).lower()
-    except UserNotParticipant:
-        # User is not a participant in the chat
-        return False
     except Exception as e:
         print(f"Error in is_admin_or_owner: {e}")
         return False
@@ -111,9 +101,6 @@ async def is_group_owner(client, chat_id, user_id):
     try:
         member = await client.get_chat_member(chat_id, user_id)
         return member.status == "creator" or "owner" in str(member.status).lower()
-    except UserNotParticipant:
-        # User is not a participant in the chat
-        return False
     except Exception as e:
         print(f"Error in is_group_owner: {e}")
         return False
@@ -131,90 +118,14 @@ async def has_ban_rights(client, chat_id, user_id):
         return (member.status == "creator" or 
                "owner" in str(member.status).lower() or
                (member.status == "administrator" and member.can_restrict_members))
-    except UserNotParticipant:
-        # User is not a participant in the chat
-        return False
     except Exception as e:
         print(f"Error checking ban rights: {e}")
         return False
 
-async def has_specific_rights(client, chat_id, user_id, right_type):
-    """Check if user has specific rights (ban, invite, pin, etc.)"""
-    # First check if user is in maintenance team (bot owners or sudo users)
-    if user_id in BOT_OWNERS or user_id in SUDO_USERS:
-        return True
-
-    try:
-        # Get the chat member information
-        member = await client.get_chat_member(chat_id, user_id)
-        
-        # Check for creator/owner (they have all rights)
-        if member.status == "creator" or "owner" in str(member.status).lower():
-            return True
-            
-        # For administrators, check specific rights
-        if member.status == "administrator":
-            if right_type == "ban" and member.can_restrict_members:
-                return True
-            elif right_type == "pin" and member.can_pin_messages:
-                return True
-            elif right_type == "invite" and member.can_invite_users:
-                return True
-            elif right_type == "delete" and member.can_delete_messages:
-                return True
-            elif right_type == "change_info" and member.can_change_info:
-                return True
-            elif right_type == "promote" and member.can_promote_members:
-                return True
-            
-        return False
-    except UserNotParticipant:
-        # User is not a participant in the chat
-        return False
-    except Exception as e:
-        print(f"Error checking specific rights: {e}")
-        return False
-
-async def find_user_in_chat(client, chat_id, username_or_id):
-    """Find a user in a chat by username or ID, with improved error handling"""
-    target_user_id = None
-    
-    # If it's already a user ID
-    if isinstance(username_or_id, int) or (isinstance(username_or_id, str) and username_or_id.isdigit()):
-        target_user_id = int(username_or_id)
-        return target_user_id
-    
-    # If it's a username
-    if isinstance(username_or_id, str):
-        username = username_or_id.replace("@", "")
-        
-        # Try multiple methods to find the user
-        try:
-            # Method 1: Direct get_users call
-            user = await client.get_users(username)
-            return user.id
-        except (UsernameInvalid, PeerIdInvalid):
-            # Method 2: Search in chat members
-            try:
-                async for member in client.get_chat_members(chat_id, query=username):
-                    if member.user.username and member.user.username.lower() == username.lower():
-                        return member.user.id
-            except Exception as e:
-                print(f"Error searching chat members: {e}")
-                
-            # Method 3: Try to find in recent messages
-            try:
-                async for message in client.get_chat_history(chat_id, limit=100):
-                    if message.from_user and message.from_user.username and message.from_user.username.lower() == username.lower():
-                        return message.from_user.id
-            except Exception as e:
-                print(f"Error searching chat history: {e}")
-                
-    return None
-
 # Auto-approve join requests
 @pr0fess0r_99.on_chat_join_request(filters.group)
 async def auto_approve(client, message: ChatJoinRequest):
+    # ... existing code ...
     chat_id = message.chat.id
     user_id = message.from_user.id
 
@@ -268,8 +179,7 @@ async def start_command(client, message):
             InlineKeyboardButton("Support", url="https://t.me/Bot_SOURCEC")
         ],
         [
-            InlineKeyboardButton("Help", callback_data="help"),
-            InlineKeyboardButton("Refresh", callback_data="refresh")
+            InlineKeyboardButton("Help", callback_data="help")
         ]
     ])
 
@@ -295,36 +205,6 @@ async def help_callback(client, callback_query):
     is_maint = await is_maintenance_team(callback_query.from_user.id)
     await send_help_message(client, callback_query.message.chat.id, is_maint)
     await callback_query.answer()
-
-# Refresh callback
-@pr0fess0r_99.on_callback_query(filters.regex("^refresh$"))
-async def refresh_callback(client, callback_query):
-    await callback_query.answer("Settings refreshed!")
-    
-    # If in a group, refresh group settings
-    if callback_query.message.chat.type in ["group", "supergroup"]:
-        chat_id = callback_query.message.chat.id
-        if chat_id in chat_settings:
-            await callback_query.message.reply("Group settings have been refreshed.")
-    else:
-        # In private chat, just acknowledge
-        await callback_query.message.reply("Bot settings have been refreshed.")
-
-# Refresh command
-@pr0fess0r_99.on_message(filters.command(["refresh"]))
-async def refresh_command(client, message):
-    chat_id = message.chat.id
-    
-    # If in a group, refresh group settings
-    if message.chat.type in ["group", "supergroup"]:
-        if chat_id in chat_settings:
-            await message.reply("Group settings have been refreshed.")
-        else:
-            chat_settings[chat_id] = {"approve": True}
-            await message.reply("Group settings have been initialized.")
-    else:
-        # In private chat, just acknowledge
-        await message.reply("Bot settings have been refreshed.")
 
 async def send_help_message(client, chat_id, show_admin_commands=False):
     # Regular help text for all users
@@ -353,10 +233,10 @@ async def send_help_message(client, chat_id, show_admin_commands=False):
 • `/unban` - Unban a user (admin must have unban rights)
 • `/mute` - Mute a user (admin must have mute rights)
 • `/unmute` - Unmute a user (admin must have unmute rights)
-• `/checkadmin` - Check admin status and permissions of a user
 
 **👥 Advanced Users Commands**
 • `/toptag` - Tag leaderboard (for all advanced users)
+• `/checkadmin` - Check admin status of a user
 
 **✨ Welcome Message Variables**
 You can use these placeholders in your custom welcome messages:
@@ -375,8 +255,6 @@ You can use these placeholders in your custom welcome messages:
 • `/broadcast` - Send message to all chats
 • `/gban` - Ban user globally
 • `/ungban` - Unban user globally
-• `/gmute` - Mute user globally
-• `/ungmute` - Unmute user globally
 • `/banall` - Ban all members in a group
 • `/unbanall` - Unban all banned members
 • `/muteall` - Mute all members in a group
@@ -750,7 +628,7 @@ async def top_tag(client, message):
 
     # Check if there's any tag data for this chat
     if chat_id not in tagged_users or not tagged_users[chat_id]:
-        await message.reply(f"No tag data available for this chat yet.")
+        await message.reply("No tag data available for this chat yet.")
         return
 
     # Sort users by tag count
@@ -794,84 +672,181 @@ async def reset_tag(client, message):
     else:
         await message.reply("No tag data exists for this chat.")
 
-# Check admin command - Shows admin status and permissions
+# New Mafia game command - Can be used by anyone
+@pr0fess0r_99.on_message(filters.command(["mafia"]) & filters.group)
+async def mafia_game(client, message):
+    chat_id = message.chat.id
+
+    # Get number of players (default to 10)
+    num_players = 10
+    if len(message.command) > 1 and message.command[1].isdigit():
+        num_players = int(message.command[1])
+        if num_players < 4:
+            await message.reply("You need at least 4 players for a Mafia game.")
+            return
+        if num_players > 20:
+            num_players = 20  # Limit to 20 players max
+
+    # Get members
+    status_message = await message.reply("🎮 Setting up Mafia game...")
+
+    try:
+        # Get all members
+        all_members = []
+        async for member in client.get_chat_members(chat_id):
+            if not member.user.is_bot and not member.user.is_deleted:
+                all_members.append(member.user)
+
+        if len(all_members) < num_players:
+            await status_message.edit_text(f"Not enough members in the group. Need {num_players} players but only found {len(all_members)}.")
+            return
+
+        # Select random players
+        players = random.sample(all_members, num_players)
+
+        # Assign roles
+        mafia_count = max(1, num_players // 5)  # 20% are mafia
+        detective_count = 1
+        doctor_count = 1
+
+        roles = ["Mafia"] * mafia_count + ["Detective"] * detective_count + ["Doctor"] * doctor_count
+        roles += ["Civilian"] * (num_players - len(roles))
+        random.shuffle(roles)
+
+        # Create game message
+        game_msg = "🎭 **Mafia Game Setup**\n\n"
+        game_msg += f"**Total Players:** {num_players}\n"
+        game_msg += f"**Mafia:** {mafia_count}\n"
+        game_msg += f"**Detective:** {detective_count}\n"
+        game_msg += f"**Doctor:** {doctor_count}\n"
+        game_msg += f"**Civilians:** {num_players - mafia_count - detective_count - doctor_count}\n\n"
+
+        # Send roles to each player privately
+        for i, player in enumerate(players):
+            role = roles[i]
+            try:
+                await client.send_message(
+                    player.id,
+                    f"🎮 **Mafia Game in {message.chat.title}**\n\nYour role is: **{role}**\n\n"
+                    f"{'🔪 You are a Mafia. Kill civilians at night and blend in during the day.' if role == 'Mafia' else ''}"
+                    f"{'🔍 You are a Detective. You can investigate one player each night to determine if they are Mafia.' if role == 'Detective' else ''}"
+                    f"{'💉 You are a Doctor. You can save one player each night from being killed.' if role == 'Doctor' else ''}"
+                    f"{'👨‍👩‍👧‍👦 You are a Civilian. Find the Mafia before they kill everyone!' if role == 'Civilian' else ''}"
+                )
+                game_msg += f"• {player.mention} has received their role.\n"
+            except Exception as e:
+                game_msg += f"• {player.mention} could not receive their role (make sure they've started the bot).\n"
+                print(f"Error sending role to {player.id}: {e}")
+
+        # Send final game setup message
+        await status_message.edit_text(game_msg)
+
+        # Send game instructions
+        instructions = """
+**🎲 How to Play Mafia:**
+
+1. The game alternates between "day" and "night" phases.
+2. During the night, the Mafia chooses someone to kill, the Detective investigates a player, and the Doctor saves someone.
+3. During the day, all players discuss who they think is Mafia and vote to eliminate one person.
+4. The game continues until either all Mafia are eliminated (Town wins) or the Mafia outnumbers the Town (Mafia wins).
+
+This is just a role assignment - continue the game through discussion in the group!
+"""
+        await client.send_message(chat_id, instructions)
+
+    except Exception as e:
+        await status_message.edit_text(f"Error setting up Mafia game: {e}")
+
+# Add a debug command to check admin status
 @pr0fess0r_99.on_message(filters.command(["checkadmin"]) & filters.group)
-async def check_admin(client, message):
+async def check_admin_status(client, message):
     chat_id = message.chat.id
     user_id = message.from_user.id
-    target_user_id = None
-    
-    # If command is a reply to a message
+
+    # If replying to someone, check their admin status
     if message.reply_to_message and message.reply_to_message.from_user:
         target_user_id = message.reply_to_message.from_user.id
-    # If command has arguments (user_id or username)
-    elif len(message.command) > 1:
-        # Try to get user_id from command
-        if message.command[1].isdigit():
-            target_user_id = int(message.command[1])
-        else:
-            # Try to get user from username
-            try:
-                target_user = await client.get_users(message.command[1].replace("@", ""))
-                target_user_id = target_user.id
-            except Exception as e:
-                await message.reply(f"Error finding user: {e}")
-                return
-    
-    # If no target specified, check the command sender
-    if not target_user_id:
+        target_user = message.reply_to_message.from_user
+    else:
         target_user_id = user_id
-    
+        target_user = message.from_user
+
     try:
-        # Get chat member info
+        # Get detailed member info
         member = await client.get_chat_member(chat_id, target_user_id)
-        user = member.user
-        
-        # Get user mention
-        user_mention = user.mention
-        
-        # Check status
-        if member.status == "creator":
-            status = "👑 Owner"
-        elif member.status == "administrator":
-            status = "⚜️ Administrator"
-        elif member.status == "member":
-            status = "👤 Member"
-        elif member.status == "restricted":
-            status = "🔒 Restricted"
-        elif member.status == "left":
-            status = "🚶‍♂️ Left the chat"
-        elif member.status == "banned":
-            status = "🚫 Banned"
-        else:
-            status = f"Unknown ({member.status})"
-        
-        # Create permissions text for admins
-        permissions = ""
+
+        # Create detailed status message
+        status_text = f"👤 **Admin Status Check for {target_user.mention}**\n\n"
+        status_text += f"**User ID:** `{target_user_id}`\n"
+        status_text += f"**Status:** {member.status}\n\n"
+
         if member.status == "administrator":
-            permissions += "\n\n**Admin Permissions:**\n"
-            permissions += f"• Can change info: {'✅' if member.can_change_info else '❌'}\n"
-            permissions += f"• Can delete messages: {'✅' if member.can_delete_messages else '❌'}\n"
-            permissions += f"• Can restrict members: {'✅' if member.can_restrict_members else '❌'}\n"
-            permissions += f"• Can invite users: {'✅' if member.can_invite_users else '❌'}\n"
-            permissions += f"• Can pin messages: {'✅' if member.can_pin_messages else '❌'}\n"
-            permissions += f"• Can promote members: {'✅' if member.can_promote_members else '❌'}\n"
-            permissions += f"• Can manage voice chats: {'✅' if getattr(member, 'can_manage_voice_chats', False) else '❌'}\n"
-            permissions += f"• Is anonymous: {'✅' if getattr(member, 'is_anonymous', False) else '❌'}\n"
-        
-        # Create message
-        admin_text = f"**User Information**\n\n"
-        admin_text += f"**User:** {user_mention}\n"
-        admin_text += f"**ID:** `{user.id}`\n"
-        admin_text += f"**Status:** {status}"
-        admin_text += permissions
-        
-        await message.reply(admin_text)
-    
-    except UserNotParticipant:
-        await message.reply("This user is not a member of this chat.")
+            status_text += "**Admin Permissions:**\n"
+            status_text += f"- Can change info: {member.can_change_info}\n"
+            status_text += f"- Can delete messages: {member.can_delete_messages}\n"
+            status_text += f"- Can restrict members: {member.can_restrict_members}\n"
+            status_text += f"- Can invite users: {member.can_invite_users}\n"
+            status_text += f"- Can pin messages: {member.can_pin_messages}\n"
+            status_text += f"- Can promote members: {member.can_promote_members}\n"
+
+        # Check using our functions
+        is_admin = await is_admin_or_owner(client, chat_id, target_user_id)
+        has_ban = await has_ban_rights(client, chat_id, target_user_id)
+
+        status_text += f"\n**Function Checks:**\n"
+        status_text += f"- is_admin_or_owner: {is_admin}\n"
+        status_text += f"- has_ban_rights: {has_ban}\n"
+
+        await message.reply(status_text)
     except Exception as e:
         await message.reply(f"Error checking admin status: {e}")
+
+# Enable/disable auto-approve commands
+@pr0fess0r_99.on_message(filters.command(["approveon"]) & filters.group)
+async def approve_on(client, message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+
+    # Check if user is admin
+    if not await is_admin_or_owner(client, chat_id, user_id):
+        # Delete command if user doesn't have rights
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.reply("You need to be an admin to use this command.")
+        return
+
+    # Enable auto-approve for this chat
+    if chat_id not in chat_settings:
+        chat_settings[chat_id] = {}
+
+    chat_settings[chat_id]["approve"] = True
+
+    await message.reply("✅ Auto-approve has been enabled for this chat.")
+
+@pr0fess0r_99.on_message(filters.command(["approveoff"]) & filters.group)
+async def approve_off(client, message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+
+    # Check if user is admin
+    if not await is_admin_or_owner(client, chat_id, user_id):
+        # Delete command if user doesn't have rights
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        await message.reply("You need to be an admin to use this command.")
+        return
+
+    # Disable auto-approve for this chat
+    if chat_id not in chat_settings:
+        chat_settings[chat_id] = {}
+
+    chat_settings[chat_id]["approve"] = False
+
+    await message.reply("❌ Auto-approve has been disabled for this chat.")
 
 # Ban command
 @pr0fess0r_99.on_message(filters.command(["ban"]) & filters.group)
@@ -880,7 +855,7 @@ async def ban_user(client, message):
     user_id = message.from_user.id
 
     # Check if user has ban rights
-    if not await has_specific_rights(client, chat_id, user_id, "ban"):
+    if not await has_ban_rights(client, chat_id, user_id):
         # Delete command if user doesn't have rights
         try:
             await message.delete()
@@ -909,14 +884,15 @@ async def ban_user(client, message):
                 reason = message.text.split(" ", 2)[2]
         else:
             # Try to get user from username
-            target_user_id = await find_user_in_chat(client, chat_id, message.command[1])
-            if not target_user_id:
-                await message.reply("User not found in this chat.")
+            try:
+                target_user = await client.get_users(message.command[1].replace("@", ""))
+                target_user_id = target_user.id
+                # Check if there's a reason provided
+                if len(message.text.split(" ", 2)) > 2:
+                    reason = message.text.split(" ", 2)[2]
+            except Exception as e:
+                await message.reply(f"Error finding user: {e}")
                 return
-                
-            # Check if there's a reason provided
-            if len(message.text.split(" ", 2)) > 2:
-                reason = message.text.split(" ", 2)[2]
 
     if not target_user_id:
         await message.reply("Please specify a user to ban by replying to their message or providing their ID/username.")
@@ -938,48 +914,22 @@ async def ban_user(client, message):
         if target_member.status in ["creator", "administrator"]:
             await message.reply("Cannot ban an admin.")
             return
-    except UserNotParticipant:
-        # User is not in the chat, can still be banned
-        pass
     except Exception as e:
         await message.reply(f"Error checking target user status: {e}")
         return
 
     # Ban the user
     try:
+        await client.ban_chat_member(chat_id, target_user_id)
+
         # Get user info for the message
         try:
             banned_user = await client.get_users(target_user_id)
-            user_mention = banned_user.mention
+            ban_message = f"🚫 {banned_user.mention} has been banned.\n**Reason:** {reason}"
         except:
-            user_mention = f"User {target_user_id}"
+            ban_message = f"🚫 User with ID {target_user_id} has been banned.\n**Reason:** {reason}"
 
-        # Ban the user from the chat
-        await client.ban_chat_member(chat_id, target_user_id)
-        
-        # Add to removed users list for this chat
-        if chat_id not in removed_users:
-            removed_users[chat_id] = {}
-        removed_users[chat_id][target_user_id] = {
-            "reason": reason,
-            "type": "ban",
-            "time": time.time(),
-            "by": user_id
-        }
-        
-        # Send notification in the group
-        ban_message = f"🚫 {user_mention} has been banned.\n**Reason:** {reason}"
         await message.reply(ban_message)
-        
-        # Send notification to the banned user
-        try:
-            chat = await client.get_chat(chat_id)
-            await client.send_message(
-                target_user_id,
-                f"You have been banned from {chat.title}.\n**Reason:** {reason}"
-            )
-        except:
-            pass  # User might have blocked the bot
     except Exception as e:
         await message.reply(f"Error banning user: {e}")
 
@@ -990,7 +940,7 @@ async def unban_user(client, message):
     user_id = message.from_user.id
 
     # Check if user has ban rights
-    if not await has_specific_rights(client, chat_id, user_id, "ban"):
+    if not await has_ban_rights(client, chat_id, user_id):
         # Delete command if user doesn't have rights
         try:
             await message.delete()
@@ -1007,7 +957,7 @@ async def unban_user(client, message):
         target_user_id = message.reply_to_message.from_user.id
     # If command has arguments (user_id or username)
     elif len(message.command) > 1:
-        # First argument could be user_id or username
+        # Try to get user_id from command
         if message.command[1].isdigit():
             target_user_id = int(message.command[1])
         else:
@@ -1015,8 +965,8 @@ async def unban_user(client, message):
             try:
                 target_user = await client.get_users(message.command[1].replace("@", ""))
                 target_user_id = target_user.id
-            except:
-                await message.reply("User not found.")
+            except Exception as e:
+                await message.reply(f"Error finding user: {e}")
                 return
 
     if not target_user_id:
@@ -1025,22 +975,15 @@ async def unban_user(client, message):
 
     # Unban the user
     try:
+        await client.unban_chat_member(chat_id, target_user_id)
+
         # Get user info for the message
         try:
             unbanned_user = await client.get_users(target_user_id)
-            user_mention = unbanned_user.mention
+            unban_message = f"✅ {unbanned_user.mention} has been unbanned."
         except:
-            user_mention = f"User {target_user_id}"
+            unban_message = f"✅ User with ID {target_user_id} has been unbanned."
 
-        # Unban the user from the chat
-        await client.unban_chat_member(chat_id, target_user_id)
-        
-        # Remove from removed users list if present
-        if chat_id in removed_users and target_user_id in removed_users[chat_id]:
-            del removed_users[chat_id][target_user_id]
-        
-        # Send notification in the group
-        unban_message = f"✅ {user_mention} has been unbanned."
         await message.reply(unban_message)
     except Exception as e:
         await message.reply(f"Error unbanning user: {e}")
@@ -1052,7 +995,7 @@ async def mute_user(client, message):
     user_id = message.from_user.id
 
     # Check if user has restrict rights
-    if not await has_specific_rights(client, chat_id, user_id, "ban"):
+    if not await has_ban_rights(client, chat_id, user_id):
         # Delete command if user doesn't have rights
         try:
             await message.delete()
@@ -1081,14 +1024,15 @@ async def mute_user(client, message):
                 reason = message.text.split(" ", 2)[2]
         else:
             # Try to get user from username
-            target_user_id = await find_user_in_chat(client, chat_id, message.command[1])
-            if not target_user_id:
-                await message.reply("User not found in this chat.")
+            try:
+                target_user = await client.get_users(message.command[1].replace("@", ""))
+                target_user_id = target_user.id
+                # Check if there's a reason provided
+                if len(message.text.split(" ", 2)) > 2:
+                    reason = message.text.split(" ", 2)[2]
+            except Exception as e:
+                await message.reply(f"Error finding user: {e}")
                 return
-                
-            # Check if there's a reason provided
-            if len(message.text.split(" ", 2)) > 2:
-                reason = message.text.split(" ", 2)[2]
 
     if not target_user_id:
         await message.reply("Please specify a user to mute by replying to their message or providing their ID/username.")
@@ -1110,25 +1054,14 @@ async def mute_user(client, message):
         if target_member.status in ["creator", "administrator"]:
             await message.reply("Cannot mute an admin.")
             return
-    except UserNotParticipant:
-        await message.reply("This user is not a member of this chat.")
-        return
     except Exception as e:
         await message.reply(f"Error checking target user status: {e}")
         return
 
     # Mute the user
     try:
-        # Get user info for the message
-        try:
-            muted_user = await client.get_users(target_user_id)
-            user_mention = muted_user.mention
-        except:
-            user_mention = f"User {target_user_id}"
-
-        # Mute the user in the chat
         await client.restrict_chat_member(
-            chat_id,
+            chat_id, 
             target_user_id,
             ChatPermissions(
                 can_send_messages=False,
@@ -1137,30 +1070,15 @@ async def mute_user(client, message):
                 can_add_web_page_previews=False
             )
         )
-        
-        # Add to removed users list for this chat
-        if chat_id not in removed_users:
-            removed_users[chat_id] = {}
-        removed_users[chat_id][target_user_id] = {
-            "reason": reason,
-            "type": "mute",
-            "time": time.time(),
-            "by": user_id
-        }
-        
-        # Send notification in the group
-        mute_message = f"🔇 {user_mention} has been muted.\n**Reason:** {reason}"
-        await message.reply(mute_message)
-        
-        # Send notification to the muted user
+
+        # Get user info for the message
         try:
-            chat = await client.get_chat(chat_id)
-            await client.send_message(
-                target_user_id,
-                f"You have been muted in {chat.title}.\n**Reason:** {reason}"
-            )
+            muted_user = await client.get_users(target_user_id)
+            mute_message = f"🔇 {muted_user.mention} has been muted.\n**Reason:** {reason}"
         except:
-            pass  # User might have blocked the bot
+            mute_message = f"🔇 User with ID {target_user_id} has been muted.\n**Reason:** {reason}"
+
+        await message.reply(mute_message)
     except Exception as e:
         await message.reply(f"Error muting user: {e}")
 
@@ -1171,7 +1089,7 @@ async def unmute_user(client, message):
     user_id = message.from_user.id
 
     # Check if user has restrict rights
-    if not await has_specific_rights(client, chat_id, user_id, "ban"):
+    if not await has_ban_rights(client, chat_id, user_id):
         # Delete command if user doesn't have rights
         try:
             await message.delete()
@@ -1188,14 +1106,16 @@ async def unmute_user(client, message):
         target_user_id = message.reply_to_message.from_user.id
     # If command has arguments (user_id or username)
     elif len(message.command) > 1:
-        # First argument could be user_id or username
+        # Try to get user_id from command
         if message.command[1].isdigit():
             target_user_id = int(message.command[1])
         else:
             # Try to get user from username
-            target_user_id = await find_user_in_chat(client, chat_id, message.command[1])
-            if not target_user_id:
-                await message.reply("User not found in this chat.")
+            try:
+                target_user = await client.get_users(message.command[1].replace("@", ""))
+                target_user_id = target_user.id
+            except Exception as e:
+                await message.reply(f"Error finding user: {e}")
                 return
 
     if not target_user_id:
@@ -1204,35 +1124,24 @@ async def unmute_user(client, message):
 
     # Unmute the user
     try:
-        # Get user info for the message
-        try:
-            unmuted_user = await client.get_users(target_user_id)
-            user_mention = unmuted_user.mention
-        except:
-            user_mention = f"User {target_user_id}"
-
-        # Unmute the user in the chat
         await client.restrict_chat_member(
-            chat_id,
+            chat_id, 
             target_user_id,
             ChatPermissions(
                 can_send_messages=True,
                 can_send_media_messages=True,
                 can_send_other_messages=True,
-                can_add_web_page_previews=True,
-                can_send_polls=True,
-                can_invite_users=True,
-                can_pin_messages=False,
-                can_change_info=False
+                can_add_web_page_previews=True
             )
         )
-        
-        # Remove from removed users list if present
-        if chat_id in removed_users and target_user_id in removed_users[chat_id]:
-            del removed_users[chat_id][target_user_id]
-        
-        # Send notification in the group
-        unmute_message = f"🔊 {user_mention} has been unmuted."
+
+        # Get user info for the message
+        try:
+            unmuted_user = await client.get_users(target_user_id)
+            unmute_message = f"🔊 {unmuted_user.mention} has been unmuted."
+        except:
+            unmute_message = f"🔊 User with ID {target_user_id} has been unmuted."
+
         await message.reply(unmute_message)
     except Exception as e:
         await message.reply(f"Error unmuting user: {e}")
@@ -1241,7 +1150,7 @@ async def unmute_user(client, message):
 @pr0fess0r_99.on_message(filters.command(["gban"]))
 async def global_ban(client, message):
     user_id = message.from_user.id
-    
+
     # Check if user is in maintenance team
     if not await is_maintenance_team(user_id):
         # Delete command if user is not authorized
@@ -1251,11 +1160,11 @@ async def global_ban(client, message):
             pass
         await message.reply("This command is restricted to maintenance team only.")
         return
-    
+
     # Check if the command has a reply or a user mention
     target_user_id = None
     reason = "No reason provided"
-    
+
     # If command is a reply to a message
     if message.reply_to_message and message.reply_to_message.from_user:
         target_user_id = message.reply_to_message.from_user.id
@@ -1281,35 +1190,38 @@ async def global_ban(client, message):
             except Exception as e:
                 await message.reply(f"Error finding user: {e}")
                 return
-    
+
     if not target_user_id:
         await message.reply("Please specify a user to globally ban by replying to their message or providing their ID/username.")
         return
-    
-    # Don't allow banning maintenance team members
-    if target_user_id in BOT_OWNERS or target_user_id in SUDO_USERS:
-        await message.reply("Cannot globally ban maintenance team members.")
+
+    # Don't allow banning self
+    if target_user_id == user_id:
+        await message.reply("You cannot ban yourself.")
         return
-    
+
+    # Don't allow banning bot owners or sudo users
+    if target_user_id in BOT_OWNERS or target_user_id in SUDO_USERS:
+        await message.reply("Cannot ban bot maintenance team members.")
+        return
+
     # Add user to global ban list
     banned_users.add(target_user_id)
-    
+
     # Get user info for the message
     try:
         banned_user = await client.get_users(target_user_id)
-        user_mention = banned_user.mention
+        ban_message = f"🌐 {banned_user.mention} has been globally banned.\n**Reason:** {reason}"
     except:
-        user_mention = f"User {target_user_id}"
-    
-    # Send confirmation message
-    gban_message = f"🌐 {user_mention} has been globally banned.\n**Reason:** {reason}"
-    await message.reply(gban_message)
+        ban_message = f"🌐 User with ID {target_user_id} has been globally banned.\n**Reason:** {reason}"
+
+    await message.reply(ban_message)
 
 # Global unban command - Restricted to maintenance team
 @pr0fess0r_99.on_message(filters.command(["ungban"]))
 async def global_unban(client, message):
     user_id = message.from_user.id
-    
+
     # Check if user is in maintenance team
     if not await is_maintenance_team(user_id):
         # Delete command if user is not authorized
@@ -1319,16 +1231,16 @@ async def global_unban(client, message):
             pass
         await message.reply("This command is restricted to maintenance team only.")
         return
-    
+
     # Check if the command has a reply or a user mention
     target_user_id = None
-    
+
     # If command is a reply to a message
     if message.reply_to_message and message.reply_to_message.from_user:
         target_user_id = message.reply_to_message.from_user.id
     # If command has arguments (user_id or username)
     elif len(message.command) > 1:
-        # First argument could be user_id or username
+        # Try to get user_id from command
         if message.command[1].isdigit():
             target_user_id = int(message.command[1])
         else:
@@ -1339,812 +1251,44 @@ async def global_unban(client, message):
             except Exception as e:
                 await message.reply(f"Error finding user: {e}")
                 return
-    
+
     if not target_user_id:
         await message.reply("Please specify a user to globally unban by replying to their message or providing their ID/username.")
         return
-    
+
     # Remove user from global ban list
     if target_user_id in banned_users:
         banned_users.remove(target_user_id)
-        
+
         # Get user info for the message
         try:
             unbanned_user = await client.get_users(target_user_id)
-            user_mention = unbanned_user.mention
+            unban_message = f"🌐 {unbanned_user.mention} has been globally unbanned."
         except:
-            user_mention = f"User {target_user_id}"
-        
-        # Send confirmation message
-        gunban_message = f"🌐 {user_mention} has been globally unbanned."
-        await message.reply(gunban_message)
+            unban_message = f"🌐 User with ID {target_user_id} has been globally unbanned."
+
+        await message.reply(unban_message)
     else:
         await message.reply("This user is not globally banned.")
 
-# Global mute command - Restricted to maintenance team
-@pr0fess0r_99.on_message(filters.command(["gmute"]))
-async def global_mute(client, message):
-    user_id = message.from_user.id
-    
-    # Check if user is in maintenance team
-    if not await is_maintenance_team(user_id):
-        # Delete command if user is not authorized
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("This command is restricted to maintenance team only.")
-        return
-    
-    # Check if the command has a reply or a user mention
-    target_user_id = None
-    reason = "No reason provided"
-    
-    # If command is a reply to a message
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user_id = message.reply_to_message.from_user.id
-        # Check if there's a reason provided
-        if len(message.text.split(" ", 1)) > 1:
-            reason = message.text.split(" ", 1)[1]
-    # If command has arguments (user_id/username and optional reason)
-    elif len(message.command) > 1:
-        # First argument could be user_id or username
-        if message.command[1].isdigit():
-            target_user_id = int(message.command[1])
-            # Check if there's a reason provided
-            if len(message.text.split(" ", 2)) > 2:
-                reason = message.text.split(" ", 2)[2]
-        else:
-            # Try to get user from username
-            try:
-                target_user = await client.get_users(message.command[1].replace("@", ""))
-                target_user_id = target_user.id
-                # Check if there's a reason provided
-                if len(message.text.split(" ", 2)) > 2:
-                    reason = message.text.split(" ", 2)[2]
-            except Exception as e:
-                await message.reply(f"Error finding user: {e}")
-                return
-    
-    if not target_user_id:
-        await message.reply("Please specify a user to globally mute by replying to their message or providing their ID/username.")
-        return
-    
-    # Don't allow muting maintenance team members
-    if target_user_id in BOT_OWNERS or target_user_id in SUDO_USERS:
-        await message.reply("Cannot globally mute maintenance team members.")
-        return
-    
-    # Add user to global mute list
-    muted_users.add(target_user_id)
-    
-    # Get user info for the message
-    try:
-        muted_user = await client.get_users(target_user_id)
-        user_mention = muted_user.mention
-    except:
-        user_mention = f"User {target_user_id}"
-    
-    # Send confirmation message
-    gmute_message = f"🌐 {user_mention} has been globally muted.\n**Reason:** {reason}"
-    await message.reply(gmute_message)
-
-# Global unmute command - Restricted to maintenance team
-@pr0fess0r_99.on_message(filters.command(["ungmute"]))
-async def global_unmute(client, message):
-    user_id = message.from_user.id
-    
-    # Check if user is in maintenance team
-    if not await is_maintenance_team(user_id):
-        # Delete command if user is not authorized
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("This command is restricted to maintenance team only.")
-        return
-    
-    # Check if the command has a reply or a user mention
-    target_user_id = None
-    
-    # If command is a reply to a message
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user_id = message.reply_to_message.from_user.id
-    # If command has arguments (user_id or username)
-    elif len(message.command) > 1:
-        # First argument could be user_id or username
-        if message.command[1].isdigit():
-            target_user_id = int(message.command[1])
-        else:
-            # Try to get user from username
-            try:
-                target_user = await client.get_users(message.command[1].replace("@", ""))
-                target_user_id = target_user.id
-            except Exception as e:
-                await message.reply(f"Error finding user: {e}")
-                return
-    
-    if not target_user_id:
-        await message.reply("Please specify a user to globally unmute by replying to their message or providing their ID/username.")
-        return
-    
-    # Remove user from global mute list
-    if target_user_id in muted_users:
-        muted_users.remove(target_user_id)
-        
-        # Get user info for the message
-        try:
-            unmuted_user = await client.get_users(target_user_id)
-            user_mention = unmuted_user.mention
-        except:
-            user_mention = f"User {target_user_id}"
-        
-        # Send confirmation message
-        gunmute_message = f"🌐 {user_mention} has been globally unmuted."
-        await message.reply(gunmute_message)
-    else:
-        await message.reply("This user is not globally muted.")
-
-# Ban all command - Restricted to maintenance team
-@pr0fess0r_99.on_message(filters.command(["banall"]) & filters.group)
-async def ban_all(client, message):
+# Refresh command - Can be used by anyone in a group
+@pr0fess0r_99.on_message(filters.command(["refresh"]) & filters.group)
+async def refresh_settings(client, message):
     chat_id = message.chat.id
-    user_id = message.from_user.id
-    
-    # Check if user is in maintenance team
-    if not await is_maintenance_team(user_id):
-        # Delete command if user is not authorized
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("This command is restricted to maintenance team only.")
-        return
-    
-    # Confirm action
-    confirm_msg = await message.reply("⚠️ **WARNING**: This will ban all members in the group. Are you sure?\n\nReply with `confirm` within 30 seconds to proceed.")
-    
-    # Wait for confirmation
-    try:
-        response = await client.wait_for_message(
-            filters.chat(chat_id) & 
-            filters.user(user_id) & 
-            filters.text & 
-            filters.reply(confirm_msg.id),
-            timeout=30
-        )
-        
-        if response.text.lower() != "confirm":
-             await confirm_msg.edit_text("Operation cancelled.")
-             return
-        
-        # Start banning all members
-        status_msg = await message.reply("Starting mass ban operation...")
-        
-        # Get all members
-        members_count = 0
-        banned_count = 0
-        
-        try:
-            async for member in client.get_chat_members(chat_id):
-                # Skip bots, deleted accounts, and the user executing the command
-                if member.user.is_bot or member.user.is_deleted or member.user.id == user_id:
-                    continue
-                    
-                # Skip bot owners and sudo users
-                if member.user.id in BOT_OWNERS or member.user.id in SUDO_USERS:
-                    continue
-                    
-                # Skip chat owner
-                if member.status == "creator":
-                    continue
-                
-                members_count += 1
-                
-                # Ban the member
-                try:
-                    await client.ban_chat_member(chat_id, member.user.id)
-                    banned_count += 1
-                    
-                    # Update status every 10 bans
-                    if banned_count % 10 == 0:
-                        await status_msg.edit_text(f"Banning in progress... {banned_count}/{members_count} members banned.")
-                    
-                    # Add a small delay to avoid flood limits
-                    await asyncio.sleep(0.5)
-                except FloodWait as e:
-                    await status_msg.edit_text(f"Hit rate limit. Waiting for {e.x} seconds...")
-                    await asyncio.sleep(e.x)
-                except Exception as e:
-                    logger.error(f"Error banning user {member.user.id}: {e}")
-            
-            await status_msg.edit_text(f"✅ Operation completed. {banned_count}/{members_count} members were banned.")
-        
-        except Exception as e:
-            await status_msg.edit_text(f"Error during mass ban operation: {e}")
-    
-    except asyncio.TimeoutError:
-        await confirm_msg.edit_text("Confirmation timeout. Operation cancelled.")
 
-# Kick command
-@pr0fess0r_99.on_message(filters.command(["kick"]) & filters.group)
-async def kick_user(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
+    # Reset chat settings for this chat
+    if chat_id in chat_settings:
+        # Keep welcome text if it exists
+        welcome_text = chat_settings[chat_id].get("welcome_text", None)
+        chat_settings[chat_id] = {}
+        if welcome_text:
+            chat_settings[chat_id]["welcome_text"] = welcome_text
 
-    # Check if user has ban rights
-    if not await has_specific_rights(client, chat_id, user_id, "ban"):
-        # Delete command if user doesn't have rights
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("You don't have permission to kick users.")
-        return
+    await message.reply("✅ Bot settings have been refreshed for this chat.")
 
-    # Check if the command has a reply or a user mention
-    target_user_id = None
-    reason = "No reason provided"
+# Run the bot
+print("Bot is starting...")
 
-    # If command is a reply to a message
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user_id = message.reply_to_message.from_user.id
-        # Check if there's a reason provided
-        if len(message.text.split(" ", 1)) > 1:
-            reason = message.text.split(" ", 1)[1]
-    # If command has arguments (user_id/username and optional reason)
-    elif len(message.command) > 1:
-        # First argument could be user_id or username
-        if message.command[1].isdigit():
-            target_user_id = int(message.command[1])
-            # Check if there's a reason provided
-            if len(message.text.split(" ", 2)) > 2:
-                reason = message.text.split(" ", 2)[2]
-        else:
-            # Try to get user from username
-            target_user_id = await find_user_in_chat(client, chat_id, message.command[1])
-            if not target_user_id:
-                await message.reply("User not found in this chat.")
-                return
-                
-            # Check if there's a reason provided
-            if len(message.text.split(" ", 2)) > 2:
-                reason = message.text.split(" ", 2)[2]
+# --- Keep Alive Server ---
 
-    if not target_user_id:
-        await message.reply("Please specify a user to kick by replying to their message or providing their ID/username.")
-        return
-
-    # Don't allow kicking self
-    if target_user_id == user_id:
-        await message.reply("You cannot kick yourself.")
-        return
-
-    # Don't allow kicking bot owners or sudo users
-    if target_user_id in BOT_OWNERS or target_user_id in SUDO_USERS:
-        await message.reply("Cannot kick bot maintenance team members.")
-        return
-
-    # Check if target user is an admin
-    try:
-        target_member = await client.get_chat_member(chat_id, target_user_id)
-        if target_member.status in ["creator", "administrator"]:
-            await message.reply("Cannot kick an admin.")
-            return
-    except UserNotParticipant:
-        await message.reply("This user is not a member of this chat.")
-        return
-    except Exception as e:
-        await message.reply(f"Error checking target user status: {e}")
-        return
-
-    # Kick the user
-    try:
-        # Get user info for the message
-        try:
-            kicked_user = await client.get_users(target_user_id)
-            user_mention = kicked_user.mention
-        except:
-            user_mention = f"User {target_user_id}"
-
-        # Kick the user from the chat (ban and then unban)
-        await client.ban_chat_member(chat_id, target_user_id)
-        await client.unban_chat_member(chat_id, target_user_id)
-        
-        # Add to removed users list for this chat
-        if chat_id not in removed_users:
-            removed_users[chat_id] = {}
-        removed_users[chat_id][target_user_id] = {
-            "reason": reason,
-            "type": "kick",
-            "time": time.time(),
-            "by": user_id
-        }
-        
-        # Send notification in the group
-        kick_message = f"👢 {user_mention} has been kicked.\n**Reason:** {reason}"
-        await message.reply(kick_message)
-        
-        # Send notification to the kicked user
-        try:
-            chat = await client.get_chat(chat_id)
-            await client.send_message(
-                target_user_id,
-                f"You have been kicked from {chat.title}.\n**Reason:** {reason}"
-            )
-        except:
-            pass  # User might have blocked the bot
-    except Exception as e:
-        await message.reply(f"Error kicking user: {e}")
-
-# Pin message command
-@pr0fess0r_99.on_message(filters.command(["pin"]) & filters.group)
-async def pin_message(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # Check if user has pin rights
-    if not await has_specific_rights(client, chat_id, user_id, "pin"):
-        # Delete command if user doesn't have rights
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("You don't have permission to pin messages.")
-        return
-
-    # Check if the command is a reply to a message
-    if not message.reply_to_message:
-        await message.reply("Please reply to a message to pin it.")
-        return
-
-    # Check for silent pin option
-    silent = False
-    if len(message.command) > 1 and message.command[1].lower() in ["silent", "quiet"]:
-        silent = True
-
-    # Pin the message
-    try:
-        await client.pin_chat_message(
-            chat_id=chat_id,
-            message_id=message.reply_to_message.id,
-            disable_notification=silent
-        )
-        
-        if silent:
-            # Delete the command message to keep it clean
-            try:
-                await message.delete()
-            except:
-                pass
-        else:
-            await message.reply("📌 Message pinned successfully.")
-    except Exception as e:
-        await message.reply(f"Error pinning message: {e}")
-
-# Unpin message command
-@pr0fess0r_99.on_message(filters.command(["unpin"]) & filters.group)
-async def unpin_message(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # Check if user has pin rights
-    if not await has_specific_rights(client, chat_id, user_id, "pin"):
-        # Delete command if user doesn't have rights
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("You don't have permission to unpin messages.")
-        return
-
-    # Check if the command is a reply to a message
-    if message.reply_to_message:
-        # Unpin specific message
-        try:
-            await client.unpin_chat_message(
-                chat_id=chat_id,
-                message_id=message.reply_to_message.id
-            )
-            await message.reply("📌 Message unpinned successfully.")
-        except Exception as e:
-            await message.reply(f"Error unpinning message: {e}")
-    else:
-        # Unpin the most recent pinned message
-        try:
-            await client.unpin_chat_message(chat_id=chat_id)
-            await message.reply("📌 Most recent pinned message unpinned successfully.")
-        except Exception as e:
-            await message.reply(f"Error unpinning message: {e}")
-
-# Unpin all messages command
-@pr0fess0r_99.on_message(filters.command(["unpinall"]) & filters.group)
-async def unpin_all_messages(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # Check if user has pin rights
-    if not await has_specific_rights(client, chat_id, user_id, "pin"):
-        # Delete command if user doesn't have rights
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("You don't have permission to unpin messages.")
-        return
-
-    # Confirm action
-    confirm_msg = await message.reply("⚠️ This will unpin all pinned messages in this chat. Are you sure?\n\nReply with `confirm` within 30 seconds to proceed.")
-    
-    # Wait for confirmation
-    try:
-        response = await client.wait_for_message(
-            filters.chat(chat_id) & 
-            filters.user(user_id) & 
-            filters.text & 
-            filters.reply(confirm_msg.id),
-            timeout=30
-        )
-        
-        if response.text.lower() != "confirm":
-            await confirm_msg.edit_text("Operation cancelled.")
-            return
-        
-        # Unpin all messages
-        try:
-            await client.unpin_all_chat_messages(chat_id)
-            await confirm_msg.edit_text("📌 All pinned messages have been unpinned.")
-        except Exception as e:
-            await confirm_msg.edit_text(f"Error unpinning all messages: {e}")
-    
-    except asyncio.TimeoutError:
-        await confirm_msg.edit_text("Confirmation timeout. Operation cancelled.")
-
-# Purge command - Delete messages in bulk
-@pr0fess0r_99.on_message(filters.command(["purge"]) & filters.group)
-async def purge_messages(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # Check if user has delete messages rights
-    if not await has_specific_rights(client, chat_id, user_id, "delete"):
-        # Delete command if user doesn't have rights
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("You don't have permission to delete messages.")
-        return
-
-    # Check if the command is a reply to a message
-    if not message.reply_to_message:
-        await message.reply("Please reply to a message to start purging from.")
-        return
-
-    # Get the message IDs to delete
-    start_message_id = message.reply_to_message.id
-    end_message_id = message.id
-
-    # Count of messages to delete
-    count = end_message_id - start_message_id + 1
-
-    # Confirm if more than 50 messages
-    if count > 50:
-        confirm_msg = await message.reply(f"⚠️ You are about to delete {count} messages. Are you sure?\n\nReply with `confirm` within 30 seconds to proceed.")
-        
-        # Wait for confirmation
-        try:
-            response = await client.wait_for_message(
-                filters.chat(chat_id) & 
-                filters.user(user_id) & 
-                filters.text & 
-                filters.reply(confirm_msg.id),
-                timeout=30
-            )
-            
-            if response.text.lower() != "confirm":
-                await confirm_msg.edit_text("Purge operation cancelled.")
-                return
-            
-            # Delete the confirmation messages too
-            await confirm_msg.delete()
-            try:
-                await response.delete()
-            except:
-                pass
-        
-        except asyncio.TimeoutError:
-            await confirm_msg.edit_text("Confirmation timeout. Purge operation cancelled.")
-            return
-
-    # Delete messages
-    deleted_count = 0
-    status_message = None
-
-    # For large purges, show a status message
-    if count > 100:
-        status_message = await client.send_message(chat_id, "Purging messages...")
-
-    try:
-        # Delete messages in chunks to avoid API limitations
-        message_ids = list(range(start_message_id, end_message_id + 1))
-        chunks = [message_ids[i:i + 100] for i in range(0, len(message_ids), 100)]
-        
-        for chunk in chunks:
-            try:
-                await client.delete_messages(chat_id, chunk)
-                deleted_count += len(chunk)
-                
-                # Update status for large purges
-                if status_message and deleted_count % 200 == 0:
-                    await status_message.edit_text(f"Purged {deleted_count}/{count} messages...")
-                
-                # Add a small delay to avoid flood limits
-                await asyncio.sleep(0.5)
-            except FloodWait as e:
-                if status_message:
-                    await status_message.edit_text(f"Hit rate limit. Waiting for {e.x} seconds...")
-                await asyncio.sleep(e.x)
-            except Exception as e:
-                logger.error(f"Error deleting message chunk: {e}")
-        
-        # Send completion message
-        completion_message = await client.send_message(
-            chat_id=chat_id,
-            text=f"✅ Successfully purged {deleted_count} messages."
-        )
-        
-        # Delete status message if it exists
-        if status_message:
-            try:
-                await status_message.delete()
-            except:
-                pass
-        
-        # Auto-delete completion message after 5 seconds
-        await asyncio.sleep(5)
-        try:
-            await completion_message.delete()
-        except:
-            pass
-    
-    except Exception as e:
-        if status_message:
-            await status_message.edit_text(f"Error during purge operation: {e}")
-        else:
-            error_message = await client.send_message(
-                chat_id=chat_id,
-                text=f"Error during purge operation: {e}"
-            )
-            # Auto-delete error message after 5 seconds
-            await asyncio.sleep(5)
-            try:
-                await error_message.delete()
-            except:
-                pass
-
-# Delete command - Delete a specific message
-@pr0fess0r_99.on_message(filters.command(["del", "delete"]) & filters.group)
-async def delete_message(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # Check if user has delete messages rights
-    if not await has_specific_rights(client, chat_id, user_id, "delete"):
-        # Delete command if user doesn't have rights
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("You don't have permission to delete messages.")
-        return
-
-    # Check if the command is a reply to a message
-    if not message.reply_to_message:
-        await message.reply("Please reply to a message to delete it.")
-        return
-
-    # Delete the replied message
-    try:
-        await message.reply_to_message.delete()
-        
-        # Delete the command message too
-        try:
-            await message.delete()
-        except:
-            pass
-    except Exception as e:
-        await message.reply(f"Error deleting message: {e}")
-
-# Promote command
-@pr0fess0r_99.on_message(filters.command(["promote"]) & filters.group)
-async def promote_user(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # Check if user has promote rights
-    if not await has_specific_rights(client, chat_id, user_id, "promote"):
-        # Delete command if user doesn't have rights
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("You don't have permission to promote users.")
-        return
-
-    # Check if the command has a reply or a user mention
-    target_user_id = None
-
-    # If command is a reply to a message
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user_id = message.reply_to_message.from_user.id
-    # If command has arguments (user_id or username)
-    elif len(message.command) > 1:
-        # First argument could be user_id or username
-        if message.command[1].isdigit():
-            target_user_id = int(message.command[1])
-        else:
-            # Try to get user from username
-            target_user_id = await find_user_in_chat(client, chat_id, message.command[1])
-            if not target_user_id:
-                await message.reply("User not found in this chat.")
-                return
-
-    if not target_user_id:
-        await message.reply("Please specify a user to promote by replying to their message or providing their ID/username.")
-        return
-
-    # Don't allow promoting self
-    if target_user_id == user_id:
-        await message.reply("You cannot promote yourself.")
-        return
-
-    # Check if target user is already an admin
-    try:
-        target_member = await client.get_chat_member(chat_id, target_user_id)
-        if target_member.status in ["creator", "administrator"]:
-            await message.reply("This user is already an admin.")
-            return
-    except UserNotParticipant:
-        await message.reply("This user is not a member of this chat.")
-        return
-    except Exception as e:
-        await message.reply(f"Error checking target user status: {e}")
-        return
-
-    # Parse custom title if provided
-    custom_title = None
-    if len(message.command) > 2:
-        custom_title = " ".join(message.command[2:])
-        # Limit title to 16 characters as per Telegram's limit
-        if len(custom_title) > 16:
-            custom_title = custom_title[:16]
-
-    # Promote the user
-    try:
-        # Get user info for the message
-        try:
-            promoted_user = await client.get_users(target_user_id)
-            user_mention = promoted_user.mention
-        except:
-            user_mention = f"User {target_user_id}"
-
-        # Promote the user in the chat
-        await client.promote_chat_member(
-            chat_id=chat_id,
-            user_id=target_user_id,
-            can_change_info=True,
-            can_delete_messages=True,
-            can_restrict_members=True,
-            can_invite_users=True,
-            can_pin_messages=True,
-            can_promote_members=False,
-            can_manage_chat=True,
-            can_manage_voice_chats=True
-        )
-        
-        # Set custom title if provided
-        if custom_title:
-            await client.set_administrator_title(chat_id, target_user_id, custom_title)
-            promote_message = f"🔰 {user_mention} has been promoted with title: **{custom_title}**"
-        else:
-            promote_message = f"🔰 {user_mention} has been promoted to admin."
-        
-        await message.reply(promote_message)
-    except Exception as e:
-        await message.reply(f"Error promoting user: {e}")
-
-# Demote command
-@pr0fess0r_99.on_message(filters.command(["demote"]) & filters.group)
-async def demote_user(client, message):
-    chat_id = message.chat.id
-    user_id = message.from_user.id
-
-    # Check if user has promote rights
-    if not await has_specific_rights(client, chat_id, user_id, "promote"):
-        # Delete command if user doesn't have rights
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await message.reply("You don't have permission to demote users.")
-        return
-
-    # Check if the command has a reply or a user mention
-    target_user_id = None
-
-    # If command is a reply to a message
-    if message.reply_to_message and message.reply_to_message.from_user:
-        target_user_id = message.reply_to_message.from_user.id
-    # If command has arguments (user_id or username)
-    elif len(message.command) > 1:
-        # First argument could be user_id or username
-        if message.command[1].isdigit():
-            target_user_id = int(message.command[1])
-        else:
-            # Try to get user from username
-            target_user_id = await find_user_in_chat(client, chat_id, message.command[1])
-            if not target_user_id:
-                await message.reply("User not found in this chat.")
-                return
-
-    if not target_user_id:
-        await message.reply("Please specify a user to demote by replying to their message or providing their ID/username.")
-        return
-
-    # Don't allow demoting self
-    if target_user_id == user_id:
-        await message.reply("You cannot demote yourself.")
-        return
-
-    # Don't allow demoting bot owners or sudo users
-    if target_user_id in BOT_OWNERS or target_user_id in SUDO_USERS:
-        await message.reply("Cannot demote bot maintenance team members.")
-        return
-
-    # Check if target user is an admin
-    try:
-        target_member = await client.get_chat_member(chat_id, target_user_id)
-        if target_member.status == "creator":
-            await message.reply("Cannot demote the chat creator.")
-            return
-        elif target_member.status != "administrator":
-            await message.reply("This user is not an admin.")
-            return
-    except UserNotParticipant:
-        await message.reply("This user is not a member of this chat.")
-        return
-    except Exception as e:
-        await message.reply(f"Error checking target user status: {e}")
-        return
-
-    # Demote the user
-    try:
-        # Get user info for the message
-        try:
-            demoted_user = await client.get_users(target_user_id)
-            user_mention = demoted_user.mention
-        except:
-            user_mention = f"User {target_user_id}"
-
-        # Demote the user in the chat
-        await client.promote_chat_member(
-            chat_id=chat_id,
-            user_id=target_user_id,
-            can_change_info=False,
-            can_delete_messages=False,
-            can_restrict_members=False,
-            can_invite_users=False,
-            can_pin_messages=False,
-            can_promote_members=False,
-            can_manage_chat=False,
-            can_manage_voice_chats=False
-        )
-        
-        demote_message = f"⬇️ {user_mention} has been demoted."
-        await message.reply(demote_message)
-    except Exception as e:
-        await message.reply(f"Error demoting user: {e}")
-
-# Start the bot
 pr0fess0r_99.run()
