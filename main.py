@@ -1516,7 +1516,7 @@ async def ban_all(client, message):
         
         if response.text.lower() != "confirm":
              await confirm_msg.edit_text("Operation cancelled.")
-            return
+             return
         
         # Start banning all members
         status_msg = await message.reply("Starting mass ban operation...")
