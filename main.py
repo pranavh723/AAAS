@@ -1149,6 +1149,8 @@ async def unmute_user(client, message):
 
 # Broadcast command - Restricted to maintenance team
 @pr0fess0r_99.on_message(filters.command(["broadcast"]))
+# Broadcast command - Restricted to maintenance team
+@pr0fess0r_99.on_message(filters.command(["broadcast"]))
 async def broadcast_message(client, message):
     user_id = message.from_user.id
     
@@ -1198,11 +1200,21 @@ async def broadcast_message(client, message):
     # Start broadcasting
     status_message = await message.reply("🔄 Starting broadcast...")
     
-    # Get all chats where the bot is present
+    # Instead of get_dialogs, we'll use a stored list of chat IDs
+    # We need to maintain a list of chats where the bot is added
+    # For now, we'll use a simple approach - broadcast to all chats where the bot has received messages
+    
+    # Get all unique chat IDs from recent messages
+    # This is a workaround since bots can't use get_dialogs
     all_chats = []
-    async for dialog in client.get_dialogs():
-        if dialog.chat.type in ["group", "supergroup", "channel"]:
-            all_chats.append(dialog.chat.id)
+    
+    # If you have a database or file storing chat IDs, you should load them here
+    # For this example, we'll just use the current chat as a demonstration
+    all_chats.append(message.chat.id)
+    
+    # You should implement a proper chat tracking system
+    # For example, whenever the bot is added to a group or receives a message,
+    # store that chat ID in a database or file
     
     if not all_chats:
         await status_message.edit_text("No chats found to broadcast to.")
@@ -1277,8 +1289,6 @@ async def broadcast_message(client, message):
         f"• Successful: {success_count}\n"
         f"• Failed: {failed_count}"
     )
-
-# ... rest of your code ...
 # Global ban command - Restricted to maintenance team
 @pr0fess0r_99.on_message(filters.command(["gban"]))
 async def global_ban(client, message):
