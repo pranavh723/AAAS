@@ -15,7 +15,6 @@ from typing import Optional
 from pyrogram.enums import ChatType
 from keepalive import keep_alive
 keep_alive()
-
 # Bot Configuration
 BOT_TOKEN = "8158074446:AAHWxDIGfwSwXIYEVAeRXTztvmHuGZN4Lh4"
 API_ID = "25056303"
@@ -92,6 +91,23 @@ PROMOTION_MESSAGE = "🎉 Congratulations! Your request has been approved!\n\n" 
 # Update support channels
 SUPPORT_CHANNEL = "https://t.me/Bot_SOURCEC"
 UPDATES_CHANNEL = "https://t.me/Bot_SOURCEC"
+
+# Initialize bot data
+bot_data = {
+    "auto_approve_chats": set(),
+    "welcome_messages": {},
+    "banned_users": set(),
+    "muted_users": {},
+    "sudo_users": set(),
+    "protected_users": set(),
+    "tag_stats": {},
+    "mafia_games": {},
+    "quiz_games": {},
+    "maintenance_team": set(BOT_OWNERS)
+}
+
+# Load data on startup
+load_data()
 
 # Add a simple ping command to test if bot is responding
 @pr0fess0r_99.on_message(filters.command("ping"))
@@ -255,77 +271,49 @@ You can use these in welcome messages:
         ])
     )
 
+# Add this after imports
+class SetEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, set):
+            return list(obj)
+        return json.JSONEncoder.default(self, obj)
+
 # File storage functions
 def save_data():
-    """Save bot data to JSON file"""
     try:
-        # Convert sets to lists for JSON serialization
+        # Convert sets to lists before saving
         data_to_save = {
             "auto_approve_chats": list(bot_data["auto_approve_chats"]),
-            "chat_settings": bot_data["chat_settings"],
-            "tagging_in_progress": bot_data["tagging_in_progress"],
-            "tagged_users": bot_data["tagged_users"],
+            "welcome_messages": bot_data["welcome_messages"],
             "banned_users": list(bot_data["banned_users"]),
-            "muted_users": list(bot_data["muted_users"]),
-            "welcome_settings": bot_data["welcome_settings"],
-            "welcome_media": bot_data["welcome_media"],
-            "spam_protection": bot_data["spam_protection"],
-            "custom_filters": bot_data["custom_filters"],
-            "quiz_games": bot_data["quiz_games"],
-            "mafia_games": bot_data["mafia_games"],
+            "muted_users": bot_data["muted_users"],
             "sudo_users": list(bot_data["sudo_users"]),
-            "maintenance_team": list(bot_data["maintenance_team"]),
-            "bot_stats": bot_data["bot_stats"]
+            "protected_users": list(bot_data["protected_users"]),
+            "tag_stats": bot_data["tag_stats"],
+            "mafia_games": bot_data["mafia_games"],
+            "quiz_games": bot_data["quiz_games"]
         }
-
-        # Save to temporary file first
-        temp_file = f"{DATA_FILE}.tmp"
-        with open(temp_file, 'w') as f:
-            json.dump(data_to_save, f, indent=4)
-
-        # Replace original file with temporary file
-        if os.path.exists(DATA_FILE):
-            os.remove(DATA_FILE)
-        os.rename(temp_file, DATA_FILE)
-
+        with open("bot_data.json", "w") as f:
+            json.dump(data_to_save, f, cls=SetEncoder, indent=4)
     except Exception as e:
         print(f"Error saving data: {e}")
 
 def load_data():
-    """Load bot data from JSON file"""
     try:
-        if os.path.exists(DATA_FILE):
-            with open(DATA_FILE, 'r') as f:
+        if os.path.exists("bot_data.json"):
+            with open("bot_data.json", "r") as f:
                 data = json.load(f)
-
-                # Convert lists back to sets
                 bot_data["auto_approve_chats"] = set(data.get("auto_approve_chats", []))
-                bot_data["chat_settings"] = data.get("chat_settings", {})
-                bot_data["tagging_in_progress"] = data.get("tagging_in_progress", {})
-                bot_data["tagged_users"] = data.get("tagged_users", {})
+                bot_data["welcome_messages"] = data.get("welcome_messages", {})
                 bot_data["banned_users"] = set(data.get("banned_users", []))
-                bot_data["muted_users"] = set(data.get("muted_users", []))
-                bot_data["welcome_settings"] = data.get("welcome_settings", {})
-                bot_data["welcome_media"] = data.get("welcome_media", {})
-                bot_data["spam_protection"] = data.get("spam_protection", {})
-                bot_data["custom_filters"] = data.get("custom_filters", {})
-                bot_data["quiz_games"] = data.get("quiz_games", {})
-                bot_data["mafia_games"] = data.get("mafia_games", {})
+                bot_data["muted_users"] = data.get("muted_users", {})
                 bot_data["sudo_users"] = set(data.get("sudo_users", []))
-                bot_data["maintenance_team"] = set(data.get("maintenance_team", []))
-                bot_data["bot_stats"] = data.get("bot_stats", {
-                    "start_time": time.time(),
-                    "total_approved": 0,
-                    "total_messages_sent": 0
-                })
-
-                # Update maintenance team with bot owners and sudo users
-                bot_data["maintenance_team"].update(BOT_OWNERS)
-                bot_data["maintenance_team"].update(bot_data["sudo_users"])
+                bot_data["protected_users"] = set(data.get("protected_users", []))
+                bot_data["tag_stats"] = data.get("tag_stats", {})
+                bot_data["mafia_games"] = data.get("mafia_games", {})
+                bot_data["quiz_games"] = data.get("quiz_games", {})
     except Exception as e:
         print(f"Error loading data: {e}")
-        # Initialize maintenance team with bot owners if loading fails
-        bot_data["maintenance_team"] = set(BOT_OWNERS)
 
 # Utility functions
 async def is_maintenance_team(user_id):
@@ -462,69 +450,33 @@ async def has_specific_rights(client, chat_id, user_id, right_type):
         return False
 
 async def get_user_info(client, chat_id, user_input, message=None):
-    """Get user information from username, user ID, mention, or reply
-    
-    Args:
-        client: The Pyrogram client
-        chat_id: The chat ID where the command was issued
-        user_input: The user input string to parse
-        message: Optional message object containing entities
-        
-    Returns:
-        User object if found, None otherwise
-    """
     try:
-        # If input is None or empty, return None
-        if not user_input:
-            return None
-
-        # Handle mentions in the format @username
-        if isinstance(user_input, str) and user_input.startswith("@"):
+        user = None
+        
+        # Check if input is a username
+        if user_input.startswith('@'):
             try:
-                return await client.get_users(user_input[1:])
+                user = await client.get_users(user_input)
             except Exception as e:
                 print(f"Error getting user by username: {e}")
-
-        # Handle text mentions from message entities
-        if message and message.entities:
-            for entity in message.entities:
-                if entity.type == "text_mention":
-                    return entity.user
-
-        # Handle mentions that include the full name with ID
-        if isinstance(user_input, str):
-            mention_pattern = re.compile(r'\[(.*?)\]\(tg://user\?id=(\d+)\)')
-            mention_match = mention_pattern.search(user_input)
-            if mention_match:
-                try:
-                    user_id = int(mention_match.group(2))
-                    return await client.get_users(user_id)
-                except Exception as e:
-                    print(f"Error getting user from mention: {e}")
-
-        # Try to get user by ID (extract numbers only)
-        if isinstance(user_input, (int, str)):
+                return None
+        
+        # Check if input is a user ID
+        elif user_input.isdigit():
             try:
-                user_id = int(re.sub(r'[^\d]', '', str(user_input)))
-                return await client.get_users(user_id)
+                user = await client.get_users(int(user_input))
             except Exception as e:
                 print(f"Error getting user by ID: {e}")
-
-        # Try to get user from chat members
-        if isinstance(user_input, str):
-            clean_input = user_input.lower().strip('@')
-            try:
-                async for member in client.get_chat_members(chat_id):
-                    if member.user.username and member.user.username.lower() == clean_input:
-                        return member.user
-                    if member.user.first_name and member.user.first_name.lower() == clean_input:
-                        return member.user
-                    if member.user.id and str(member.user.id) == clean_input:
-                        return member.user
-            except Exception as e:
-                print(f"Error searching chat members: {e}")
-
-        return None
+                return None
+        
+        # Check if input is a reply
+        elif message and message.reply_to_message:
+            user = message.reply_to_message.from_user
+        
+        if not user:
+            return None
+            
+        return user
     except Exception as e:
         print(f"Error in get_user_info: {e}")
         return None
@@ -1865,47 +1817,65 @@ async def start_mafia_game(client, chat_id):
     try:
         game = bot_data["mafia_games"][chat_id]
         players = game["players"]
-        player_count = len(players)
-
-        # Assign roles based on player count
-        mafia_count = max(1, player_count // 4)
-        special_roles = ["doctor", "detective"]
-        roles = ["mafia"] * mafia_count + ["civilian"] * (player_count - mafia_count - 2) + special_roles
-        random.shuffle(roles)
-
-        # Assign roles and notify players
-        for i, player_id in enumerate(players):
-            role = roles[i]
-            game["roles"][player_id] = role
-            if role == "mafia":
-                game["mafia"].add(player_id)
-            elif role == "doctor":
-                game["doctor"] = player_id
-            elif role == "detective":
-                game["detective"] = player_id
-
-            # Send role message to player
-            try:
-                role_text = f"Your role is: {role.capitalize()}"
-                if role == "mafia":
-                    other_mafia = [p for p in game["mafia"] if p != player_id]
-                    if other_mafia:
-                        role_text += f"\nOther mafia members: {', '.join([f'@{p}' for p in other_mafia])}"
-                await client.send_message(player_id, role_text)
-            except Exception as e:
-                print(f"Error sending role to player {player_id}: {e}")
-
-        # Start night phase
+        
+        if len(players) < 5:
+            await client.send_message(chat_id, "❌ Not enough players! Need at least 5 players to start.")
+            return
+            
+        # Assign roles
+        roles = {}
+        mafia_count = max(1, len(players) // 4)
+        roles["mafia"] = random.sample(players, mafia_count)
+        roles["doctor"] = random.choice([p for p in players if p not in roles["mafia"]])
+        roles["detective"] = random.choice([p for p in players if p not in roles["mafia"] and p != roles["doctor"]])
+        roles["villagers"] = [p for p in players if p not in roles["mafia"] and p != roles["doctor"] and p != roles["detective"]]
+        
+        game["roles"] = roles
         game["phase"] = "night"
+        game["alive"] = set(players)
+        game["mafia"] = set(roles["mafia"])
+        game["doctor"] = roles["doctor"]
+        game["detective"] = roles["detective"]
+        game["last_vote_time"] = time.time()
+        game["game_start_time"] = time.time()
         game["round_number"] = 1
-        game["game_start_time"] = datetime.now()
-        game["game_log"].append(f"Game started with {player_count} players")
-
-        # Send game start message
+        game["night_actions"] = {}
+        game["day_actions"] = {}
+        game["game_log"] = []
+        
+        # Notify players of their roles
+        for player_id in players:
+            role = None
+            if player_id in roles["mafia"]:
+                role = "mafia"
+            elif player_id == roles["doctor"]:
+                role = "doctor"
+            elif player_id == roles["detective"]:
+                role = "detective"
+            else:
+                role = "villager"
+                
+            role_message = f"🎭 Your role is: {role.upper()}\n\n"
+            if role == "mafia":
+                role_message += "Your teammates are:\n"
+                for mafia_id in roles["mafia"]:
+                    if mafia_id != player_id:
+                        try:
+                            mafia_user = await client.get_users(mafia_id)
+                            role_message += f"- {mafia_user.first_name}\n"
+                        except:
+                            role_message += f"- User {mafia_id}\n"
+            elif role == "doctor":
+                role_message += "You can save one person each night."
+            elif role == "detective":
+                role_message += "You can investigate one person each night to find out if they are mafia."
+                
+            await safe_send_message(client, player_id, role_message)
+            
         await client.send_message(
             chat_id,
-            "🌙 Night has fallen. Mafia members, please choose your target.\n"
-            "Use /vote @username to vote for your target."
+            "🎭 The game has started!\n\n"
+            "🌙 It's night time. Mafia, Doctor, and Detective, please check your DMs for your roles and actions."
         )
     except Exception as e:
         print(f"Error in start_mafia_game: {e}")
@@ -3128,3 +3098,13 @@ async def generate_meme(client, message):
     except Exception as e:
         print(f"Error in generate_meme: {e}")
         await message.reply("❌ An error occurred while generating the meme.")
+
+# Add this function after imports
+async def safe_send_message(client, user_id, text):
+    try:
+        # Try to send message
+        await client.send_message(user_id, text)
+        return True
+    except Exception as e:
+        print(f"Could not send DM to user {user_id}: {e}")
+        return False
