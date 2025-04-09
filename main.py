@@ -13,6 +13,8 @@ import io
 import requests
 from typing import Optional
 from pyrogram.enums import ChatType
+from keepalive import keep_alive
+keep_alive()
 
 # Bot Configuration
 BOT_TOKEN = "8158074446:AAHWxDIGfwSwXIYEVAeRXTztvmHuGZN4Lh4"
@@ -2572,14 +2574,27 @@ async def stats_command(client, message):
         await message.reply("❌ Error getting bot statistics")
 
 async def main():
-    await pr0fess0r_99.start()
-    print("Bot started successfully!")
-    
-    # Start auto meme poster task
-    asyncio.create_task(auto_meme_poster(pr0fess0r_99))
-    
-    await idle()
-    await pr0fess0r_99.stop()
+    try:
+        await pr0fess0r_99.start()
+        print("Bot started successfully!")
+        
+        # Start auto meme poster task
+        meme_task = asyncio.create_task(auto_meme_poster(pr0fess0r_99))
+        
+        # Keep the bot running
+        await idle()
+        
+        # Cleanup
+        meme_task.cancel()
+        try:
+            await meme_task
+        except asyncio.CancelledError:
+            pass
+            
+        await pr0fess0r_99.stop()
+    except Exception as e:
+        print(f"Error in main: {e}")
+        await pr0fess0r_99.stop()
 
 if __name__ == "__main__":
     pr0fess0r_99.run(main())
