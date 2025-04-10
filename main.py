@@ -580,15 +580,23 @@ async def auto_approve(client, message: ChatJoinRequest):
                     ]
                 ])
 
-                # Send message with keyboard
-                await client.send_message(
-                    chat_id=user_id,
-                    text=welcome_text,
-                    reply_markup=keyboard
-                )
+                # Try to send message with keyboard
+                try:
+                    await client.send_message(
+                        chat_id=user_id,
+                        text=welcome_text,
+                        reply_markup=keyboard
+                    )
+                except Exception as e:
+                    if "PEER_ID_INVALID" in str(e):
+                        # Log the error but don't fail the auto-approve
+                        print(f"Could not send DM to user {user_id}: User hasn't started a conversation with the bot")
+                    else:
+                        # Log other errors
+                        print(f"Could not send DM to user {user_id}: {e}")
 
             except Exception as e:
-                print(f"Could not send DM to user {user_id}: {e}")
+                print(f"Error in welcome message handling: {e}")
 
             # Update stats
             bot_data["bot_stats"]["total_approved"] += 1
@@ -750,18 +758,31 @@ async def ban_user(client, message):
             await message.reply("❌ You cannot ban a maintenance team member or bot owner.")
             return
 
-        # Ban the user
-        await client.ban_chat_member(message.chat.id, target_user.id)
-        bot_data["banned_users"].add(target_user.id)
-        
-        # Send ban confirmation with user details
-        ban_msg = f"✅ User has been banned successfully!\n\n"
-        ban_msg += f"👤 Banned User: {target_user.mention}\n"
-        ban_msg += f"🆔 User ID: `{target_user.id}`\n"
-        ban_msg += f"👮 Banned By: {message.from_user.mention}"
-        
-        await message.reply(ban_msg)
-        save_data()
+        try:
+            # Check if bot has admin rights
+            bot_member = await client.get_chat_member(message.chat.id, "me")
+            if not bot_member.privileges.can_restrict_members:
+                await message.reply("❌ I don't have permission to ban users in this chat. Please make me an admin with ban rights.")
+                return
+
+            # Ban the user
+            await client.ban_chat_member(message.chat.id, target_user.id)
+            bot_data["banned_users"].add(target_user.id)
+            
+            # Send ban confirmation with user details
+            ban_msg = f"✅ User has been banned successfully!\n\n"
+            ban_msg += f"👤 Banned User: {target_user.mention}\n"
+            ban_msg += f"🆔 User ID: `{target_user.id}`\n"
+            ban_msg += f"👮 Banned By: {message.from_user.mention}"
+            
+            await message.reply(ban_msg)
+            save_data()
+        except Exception as e:
+            if "CHAT_ADMIN_REQUIRED" in str(e):
+                await message.reply("❌ I don't have permission to ban users in this chat. Please make me an admin with ban rights.")
+            else:
+                print(f"Error in ban command: {e}")
+                await message.reply("❌ An error occurred while processing the ban command.")
     except Exception as e:
         print(f"Error in ban command: {e}")
         await message.reply("❌ An error occurred while processing the ban command.")
