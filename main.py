@@ -17,7 +17,7 @@ from keepalive import keep_alive
 keep_alive()
 
 # Bot Configuration
-BOT_TOKEN = "7399953040:AAEYa0H41TKOAH5DWO-sU8rFutByKk777NM"
+BOT_TOKEN = "8158074446:AAHWxDIGfwSwXIYEVAeRXTztvmHuGZN4Lh4"
 API_ID = "25056303"
 API_HASH = "423f1e11581ff494841681fc66e9c8e6"
 
@@ -1593,8 +1593,23 @@ async def broadcast_message(client, message):
             )
             return
 
-        # Get all chats where bot is admin
-        chats = list(bot_data["auto_approve_chats"])
+        # Check if specific chat ID is provided
+        args = message.command[1:]
+        target_chat = None
+        if args:
+            try:
+                target_chat = int(args[0])
+            except ValueError:
+                await message.reply("❌ Invalid chat ID. Please provide a valid numeric chat ID.")
+                return
+
+        # Get chats to broadcast to
+        if target_chat:
+            chats = [target_chat]
+            broadcast_type = "specific chat"
+        else:
+            chats = list(bot_data["auto_approve_chats"])
+            broadcast_type = "all chats"
         
         if not chats:
             await message.reply("❌ No chats found for broadcasting.")
@@ -1602,7 +1617,7 @@ async def broadcast_message(client, message):
 
         # Send initial status
         status_msg = await message.reply(
-            f"🚀 Starting broadcast to {len(chats)} chats...\n\n"
+            f"🚀 Starting broadcast to {len(chats)} {broadcast_type}...\n\n"
             "• Success: 0\n"
             "• Failed: 0\n"
             "• Progress: 0%"
@@ -1631,7 +1646,7 @@ async def broadcast_message(client, message):
                 if (success + failed) % 5 == 0:
                     progress = (success + failed) * 100 // len(chats)
                     await status_msg.edit_text(
-                        f"🚀 Broadcasting...\n\n"
+                        f"🚀 Broadcasting to {broadcast_type}...\n\n"
                         f"• Success: {success}\n"
                         f"• Failed: {failed}\n"
                         f"• Progress: {progress}%\n"
@@ -1644,6 +1659,7 @@ async def broadcast_message(client, message):
         # Send final status
         await status_msg.edit_text(
             f"✅ Broadcast completed!\n\n"
+            f"• Target: {broadcast_type}\n"
             f"• Total chats: {len(chats)}\n"
             f"• Success: {success}\n"
             f"• Failed: {failed}"
@@ -2113,6 +2129,14 @@ async def start_tagging(client, message):
         total_members = len(members)
         batches = [members[i:i + 5] for i in range(0, total_members, 5)]
 
+        # Store tagging progress
+        bot_data["tagging_in_progress"][chat_id] = {
+            "started_by": user_id,
+            "total_members": total_members,
+            "tagged_members": 0
+        }
+        save_data()
+
         for batch in batches:
             # Create message with emojis and hidden mentions
             batch_message = tag_message + "\n\n"
@@ -2122,6 +2146,8 @@ async def start_tagging(client, message):
 
             try:
                 await client.send_message(chat_id, batch_message)
+                bot_data["tagging_in_progress"][chat_id]["tagged_members"] += len(batch)
+                save_data()
             except FloodWait as e:
                 await asyncio.sleep(e.value)
                 continue
@@ -2131,6 +2157,11 @@ async def start_tagging(client, message):
             
             # Add delay between batches
             await asyncio.sleep(2)
+
+        # Remove tagging progress after completion
+        if chat_id in bot_data["tagging_in_progress"]:
+            del bot_data["tagging_in_progress"][chat_id]
+            save_data()
 
     except Exception as e:
         print(f"Error in tag command: {e}")
@@ -2170,11 +2201,6 @@ async def stop_tagging(client, message):
         # Check if tagging is in progress
         if chat_id not in bot_data.get("tagging_in_progress", {}):
             await message.reply("❌ No tagging process is currently running.")
-            return
-
-        # Check if user started the tagging process
-        if bot_data["tagging_in_progress"][chat_id]["started_by"] != user_id:
-            await message.reply("❌ You can only stop a tagging process that you started.")
             return
 
         # Stop tagging process
@@ -2247,9 +2273,15 @@ async def refresh_settings(client, message):
         chat_id = message.chat.id
         user_id = message.from_user.id
 
-        # Check if user has admin rights
-        if not await has_specific_rights(client, chat_id, user_id, "can_manage_chat"):
-            await message.reply("❌ You don't have permission to use this command.")
+        # Check if user is a member of the chat
+        try:
+            member = await client.get_chat_member(chat_id, user_id)
+            if member.status not in ["member", "administrator", "creator"]:
+                await message.reply("❌ You need to be a member of this chat to use this command.")
+                return
+        except Exception as e:
+            print(f"Error checking member status: {e}")
+            await message.reply("❌ Could not verify your membership in this chat.")
             return
 
         # Reload settings from database
@@ -2811,3 +2843,257 @@ async def owner_command(client, message):
     except Exception as e:
         print(f"Error in owner command: {e}")
         await message.reply("❌ An error occurred!")
+
+@pr0fess0r_99.on_message(filters.command(["chats"]) & filters.private)
+async def list_chats(client, message):
+    try:
+        user_id = message.from_user.id
+        
+        # Check if user is bot owner
+        if user_id not in BOT_OWNERS:
+            await message.reply("❌ Only bot owners can use this command!")
+            return
+
+        # Get all chats where bot is added
+        chats = list(bot_data["auto_approve_chats"])
+        
+        if not chats:
+            await message.reply("❌ Bot is not added to any chats yet.")
+            return
+
+        # Send initial status
+        status_msg = await message.reply("📊 Fetching chat information...")
+
+        # Process chats in batches
+        chat_info = []
+        batch_size = 5  # Reduced batch size due to additional API calls
+        total_batches = (len(chats) + batch_size - 1) // batch_size
+
+        for i in range(0, len(chats), batch_size):
+            batch = chats[i:i + batch_size]
+            batch_num = i // batch_size + 1
+            
+            for chat_id in batch:
+                try:
+                    chat = await client.get_chat(chat_id)
+                    chat_type = "Group" if chat.type == ChatType.GROUP else "Channel"
+                    
+                    # Get invite link if available
+                    invite_link = "No link available"
+                    try:
+                        if chat.username:
+                            invite_link = f"https://t.me/{chat.username}"
+                        else:
+                            invite_link = await client.export_chat_invite_link(chat_id)
+                    except:
+                        pass
+
+                    # Determine if chat is private or public
+                    privacy = "🔒 Private" if not chat.username else "🔓 Public"
+                    
+                    chat_info.append(
+                        f"• {chat_type}: {chat.title}\n"
+                        f"  ID: {chat.id}\n"
+                        f"  Status: {privacy}\n"
+                        f"  Link: {invite_link}\n"
+                    )
+                except Exception as e:
+                    print(f"Error getting chat info for {chat_id}: {e}")
+                    chat_info.append(f"• Unknown Chat (ID: {chat_id})\n")
+
+            # Update status
+            progress = (i + len(batch)) * 100 // len(chats)
+            await status_msg.edit_text(
+                f"📊 Fetching chat information...\n\n"
+                f"• Progress: {progress}%\n"
+                f"• Batch: {batch_num}/{total_batches}"
+            )
+
+            # Add delay between batches
+            await asyncio.sleep(2)
+
+        # Create final message
+        total_chats = len(chat_info)
+        message_text = f"📊 **Chats List**\n\n"
+        message_text += f"Total Chats: {total_chats}\n\n"
+        message_text += "\n".join(chat_info)
+
+        # Send final message with pagination if needed
+        if len(message_text) > 4000:
+            # Split into multiple messages
+            parts = [message_text[i:i+4000] for i in range(0, len(message_text), 4000)]
+            for part in parts:
+                await message.reply(part)
+        else:
+            await status_msg.edit_text(message_text)
+
+    except Exception as e:
+        print(f"Error in list_chats command: {e}")
+        await message.reply("❌ An error occurred while fetching chat list.")
+
+@pr0fess0r_99.on_callback_query(filters.regex("^owner_chats$"))
+async def owner_chats_callback(client, callback_query):
+    """Show list of chats in owner panel"""
+    try:
+        user_id = callback_query.from_user.id
+        
+        if user_id not in BOT_OWNERS:
+            await callback_query.answer("You are not authorized!", show_alert=True)
+            return
+
+        # Get all chats where bot is added
+        chats = list(bot_data["auto_approve_chats"])
+        
+        if not chats:
+            await callback_query.message.edit_text(
+                "❌ Bot is not added to any chats yet.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔙 Back", callback_data="owner_panel")]
+                ])
+            )
+            return
+
+        # Create chat list message
+        chat_list = "📊 **Chats List**\n\n"
+        chat_list += f"Total Chats: {len(chats)}\n\n"
+        
+        # Add first 5 chats (reduced due to additional API calls)
+        for i, chat_id in enumerate(chats[:5], 1):
+            try:
+                chat = await client.get_chat(chat_id)
+                chat_type = "Group" if chat.type == ChatType.GROUP else "Channel"
+                
+                # Get invite link if available
+                invite_link = "No link available"
+                try:
+                    if chat.username:
+                        invite_link = f"https://t.me/{chat.username}"
+                    else:
+                        invite_link = await client.export_chat_invite_link(chat_id)
+                except:
+                    pass
+
+                # Determine if chat is private or public
+                privacy = "🔒 Private" if not chat.username else "🔓 Public"
+                
+                chat_list += (
+                    f"{i}. {chat_type}: {chat.title}\n"
+                    f"   ID: {chat.id}\n"
+                    f"   Status: {privacy}\n"
+                    f"   Link: {invite_link}\n\n"
+                )
+            except:
+                chat_list += f"{i}. Unknown Chat (ID: {chat_id})\n\n"
+
+        # Add pagination if needed
+        keyboard = []
+        if len(chats) > 5:
+            keyboard.append([
+                InlineKeyboardButton("Next Page ➡️", callback_data="chats_page_2")
+            ])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="owner_panel")])
+
+        await callback_query.message.edit_text(
+            chat_list,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        await callback_query.answer()
+    except Exception as e:
+        print(f"Error in owner chats callback: {e}")
+        await callback_query.answer("Error occurred!", show_alert=True)
+
+@pr0fess0r_99.on_callback_query(filters.regex("^chats_page_"))
+async def chats_page_callback(client, callback_query):
+    """Handle pagination for chats list"""
+    try:
+        user_id = callback_query.from_user.id
+        
+        if user_id not in BOT_OWNERS:
+            await callback_query.answer("You are not authorized!", show_alert=True)
+            return
+
+        page = int(callback_query.data.split("_")[-1])
+        chats = list(bot_data["auto_approve_chats"])
+        items_per_page = 5  # Reduced due to additional API calls
+        start_idx = (page - 1) * items_per_page
+        end_idx = start_idx + items_per_page
+
+        chat_list = "📊 **Chats List**\n\n"
+        chat_list += f"Total Chats: {len(chats)}\n\n"
+        
+        # Add chats for current page
+        for i, chat_id in enumerate(chats[start_idx:end_idx], start_idx + 1):
+            try:
+                chat = await client.get_chat(chat_id)
+                chat_type = "Group" if chat.type == ChatType.GROUP else "Channel"
+                
+                # Get invite link if available
+                invite_link = "No link available"
+                try:
+                    if chat.username:
+                        invite_link = f"https://t.me/{chat.username}"
+                    else:
+                        invite_link = await client.export_chat_invite_link(chat_id)
+                except:
+                    pass
+
+                # Determine if chat is private or public
+                privacy = "🔒 Private" if not chat.username else "🔓 Public"
+                
+                chat_list += (
+                    f"{i}. {chat_type}: {chat.title}\n"
+                    f"   ID: {chat.id}\n"
+                    f"   Status: {privacy}\n"
+                    f"   Link: {invite_link}\n\n"
+                )
+            except:
+                chat_list += f"{i}. Unknown Chat (ID: {chat_id})\n\n"
+
+        # Add pagination buttons
+        keyboard = []
+        if page > 1:
+            keyboard.append([
+                InlineKeyboardButton("⬅️ Previous Page", callback_data=f"chats_page_{page-1}")
+            ])
+        if end_idx < len(chats):
+            keyboard.append([
+                InlineKeyboardButton("Next Page ➡️", callback_data=f"chats_page_{page+1}")
+            ])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="owner_panel")])
+
+        await callback_query.message.edit_text(
+            chat_list,
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        await callback_query.answer()
+    except Exception as e:
+        print(f"Error in chats page callback: {e}")
+        await callback_query.answer("Error occurred!", show_alert=True)
+
+# Update owner panel to include chats list button
+@pr0fess0r_99.on_callback_query(filters.regex("^owner_panel$"))
+async def owner_panel_handler(client, callback_query):
+    """Handle the owner panel main menu"""
+    try:
+        user_id = callback_query.from_user.id
+        
+        if user_id not in BOT_OWNERS:
+            await callback_query.answer("You are not authorized to use this panel!", show_alert=True)
+            return
+            
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 Statistics", callback_data="owner_stats"),
+             InlineKeyboardButton("👑 Sudo Users", callback_data="owner_sudolist")],
+            [InlineKeyboardButton("📢 Broadcast", callback_data="owner_broadcast"),
+             InlineKeyboardButton("⚙️ Settings", callback_data="owner_settings")],
+            [InlineKeyboardButton("💬 Chats List", callback_data="owner_chats")]
+        ])
+        
+        await callback_query.message.edit_text(
+            "**🤖 Owner Control Panel**\n\nSelect an option from below:",
+            reply_markup=keyboard
+        )
+        await callback_query.answer()
+    except Exception as e:
+        print(f"Error in owner panel: {e}")
+        await callback_query.answer("Error occurred!", show_alert=True)
