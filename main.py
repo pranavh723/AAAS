@@ -17,7 +17,7 @@ from keepalive import keep_alive
 keep_alive()
 
 # Bot Configuration
-BOT_TOKEN = "8158074446:AAHWxDIGfwSwXIYEVAeRXTztvmHuGZN4Lh4"
+BOT_TOKEN = "7399953040:AAEYa0H41TKOAH5DWO-sU8rFutByKk777NM"
 API_ID = "25056303"
 API_HASH = "423f1e11581ff494841681fc66e9c8e6"
 
